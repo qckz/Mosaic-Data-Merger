@@ -1,0 +1,63 @@
+{
+  "output": {
+    "path": "./output/customers.csv",
+    "delimiter": ";",
+    "encoding": "utf-8",
+    "columns": ["Place", "Name", "Date"],
+    "mode": "replace",
+    "add_provenance": true,
+    "atomic_write": true
+  },
+  "inputs": [
+    {
+      "path": "./input/locations-without-headers.csv",
+      "header": false,
+      "delimiter": ",",
+      "mapping": {
+        "1": "Place",
+        "2": "Name",
+        "4": "Date"
+      },
+      "on_malformed_row": "pad"
+    },
+    {
+      "path": "./input/customers-with-headers.csv",
+      "header": true,
+      "delimiter": ";",
+      "mapping": {
+        "City": "Place",
+        "Customer name": "Name",
+        "Created at": "Date"
+      }
+    }
+  ],
+  "transformations": {
+    "Place": [
+      { "type": "trim" },
+      { "type": "title_case" }
+    ],
+    "Date": [
+      {
+        "type": "date_format",
+        "input_formats": ["%d-%m-%Y", "%Y/%m/%d"],
+        "output_format": "%Y-%m-%d"
+      }
+    ]
+  },
+  "filters": [
+    { "column": "Name", "operator": "not_empty" }
+  ],
+  "validation": {
+    "on_error": "reject",
+    "rejects_path": "./output/customer-rejects.csv",
+    "rules": [
+      { "column": "Place", "type": "required" },
+      { "column": "Date", "type": "date", "format": "%Y-%m-%d" }
+    ]
+  },
+  "deduplication": {
+    "enabled": true,
+    "keys": ["Place", "Name"],
+    "keep": "first"
+  }
+}
