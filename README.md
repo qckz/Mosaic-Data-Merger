@@ -1,6 +1,6 @@
 # CSV Manipulator
 
-`csv_merge.py` transforms CSV and JSONL files into one standardized CSV. It streams records rather than loading all input rows into memory, making it suitable for very large files. It needs only Python 3.10+ and the standard library.
+`csv_merge.py` transforms CSV, JSON, JSONL, and STIX 2.1 files into CSV, JSON, or STIX output. CSV and JSONL are processed row-by-row; regular JSON and STIX Bundles are read as complete JSON documents. It needs only Python 3.10+ and the standard library.
 
 A job may have one input (a transformation) or many inputs (a merge). The output is always CSV.
 
@@ -23,16 +23,17 @@ Inspect an unfamiliar source before writing its configuration:
 python3 csv_merge.py inspect ./input/source.csv
 python3 csv_merge.py inspect ./input/source.csv --encoding windows-1252 --delimiter ';'
 python3 csv_merge.py inspect ./input/events.jsonl
+python3 csv_merge.py inspect ./input/threat-intelligence.json --format stix
 ```
 
 The commands print JSON, which makes their output easy to store in automation logs.
 
 ## Job configuration
 
-Start by copying [example-job.json](example-job.json), then update its input and output paths for your job. Relative paths are resolved from the configuration file's directory (not the current terminal directory). The top-level fields are:
+Start by copying [example-job.json](example-job.json), then update its input and output paths for your job. For a complete STIX input-to-STIX Bundle output example, use [example-stix-job.json](example-stix-job.json). Relative paths are resolved from the configuration file's directory (not the current terminal directory). The top-level fields are:
 
-- `output`: destination, output schema, delimiter/encoding, output mode, and provenance columns.
-- `inputs`: one specification per CSV or JSONL source file, including its layout and field mapping.
+- `output`: destination, format, schema, delimiter/encoding, output mode, and provenance columns.
+- `inputs`: one specification per CSV, JSON, JSONL, or STIX source file, including its layout and field mapping.
 - `transformations`: cleanup steps applied to normalized output fields.
 - `filters`: conditions a row must satisfy to be included.
 - `validation`: data-quality rules and how invalid records are handled.
@@ -45,25 +46,26 @@ Start by copying [example-job.json](example-job.json), then update its input and
 | Option | Required | Meaning |
 |---|---:|---|
 | `path` | Yes | Output filename and location. Its parent directories are created when needed. |
+| `format` | No | `csv` (default), `json` (a JSON array of output records), or `stix` (a STIX 2.1 Bundle). |
 | `columns` | Yes | Ordered output header names. Every mapping target must appear here. |
-| `delimiter` | No | One-character CSV delimiter; defaults to `,`. |
+| `delimiter` | No | One-character CSV delimiter; defaults to `,`. It also controls CSV rejects output. |
 | `encoding` | No | Output text encoding; defaults to `utf-8`. |
 | `mode` | No | `replace` (default) creates a new file; `append` adds rows to a compatible existing file. |
 | `atomic_write` | No | With `replace` (the default), write a temporary file and replace the destination only after success. |
 | `add_provenance` | No | Adds `source_file` and `source_row` columns automatically. |
 
-Appending checks that the existing header is exactly the configured output schema. `atomic_write` cannot be used with append mode.
+Appending checks that the existing CSV header is exactly the configured output schema. JSON and STIX output always use `replace`; `atomic_write` cannot be used with append mode.
 
 ### Input options
 
 Each item in `inputs` requires `path` and `mapping`.
 
-| Option | CSV | JSONL | Meaning |
+| Option | CSV | JSON / JSONL / STIX | Meaning |
 |---|:---:|:---:|---|
-| `format` | Optional | Optional | `csv` or `jsonl`. Files ending in `.jsonl` default to JSONL; all other files default to CSV. |
+| `format` | Optional | Optional | `csv`, `json`, `jsonl`, or `stix`. `.jsonl` defaults to JSONL, `.json` defaults to JSON, and other files default to CSV. |
 | `encoding` | Optional | Optional | Source encoding; defaults to `utf-8`. |
 | `mapping` | Yes | Yes | Source field-to-output-column mapping. |
-| `on_malformed_row` | Optional | Optional | CSV: `error`, `skip`, or `pad`; JSONL: `error` or `skip`. |
+| `on_malformed_row` | Optional | Optional | CSV: `error`, `skip`, or `pad`; JSON/JSONL/STIX: `error` or `skip` for invalid records. |
 | `header` | Optional | No | `true` (default), `false`, or `auto`; applies only to CSV. |
 | `delimiter` | Optional | No | One-character input separator. If omitted, the tool attempts CSV dialect detection. |
 | `quotechar`, `escapechar` | Optional | No | One-character CSV quote/escape settings. |
@@ -116,6 +118,62 @@ JSONL contains one JSON object per line. Set `"format": "jsonl"`, or omit it for
 
 `header` and `delimiter` do not apply to JSONL. JSON `null` becomes an empty CSV value, booleans become `true` or `false`, and nested arrays/objects are stored as compact JSON within one CSV field. A malformed JSON line can stop the job (`error`, the default) or be skipped.
 
+### JSON input and output
+
+Set `"format": "json"` on an input to read either one JSON object or an array of JSON objects. Source object keys are mapped in exactly the same way as JSONL keys. JSON input is loaded as a complete document, so use JSONL for very large record streams.
+
+Set `"format": "json"` in `output` to write a JSON array. The configured `output.columns` become the keys in every emitted object:
+
+```json
+"output": {
+  "path": "./output/customers.json",
+  "format": "json",
+  "columns": ["Place", "Name", "Date"],
+  "atomic_write": true
+}
+```
+
+### STIX 2.1 input and output
+
+STIX is JSON-based threat-intelligence data. A `stix` input accepts either a STIX Bundle or one STIX object. For a Bundle, each object in `objects` is processed as one source record. Top-level STIX properties such as `type`, `id`, `name`, `pattern`, and `created` can be mapped to output columns; nested values are preserved as compact JSON strings.
+
+```json
+{
+  "path": "./input/intelligence.json",
+  "format": "stix",
+  "mapping": {
+    "type": "Object type",
+    "id": "STIX ID",
+    "name": "Name",
+    "pattern": "Pattern"
+  }
+}
+```
+
+STIX output writes one configured STIX object for each normalized row and wraps them in a STIX 2.1 Bundle. `properties` maps output columns to properties on the generated STIX object; `static` supplies constant JSON-valued properties shared by every object.
+
+[example-stix-job.json](example-stix-job.json) is a complete STIX example: it reads `indicator` objects from a Bundle, maps `name`, `pattern`, and `id`, then emits one STIX `note` per accepted row. The configured `object_refs` value should be replaced with IDs relevant to your own feed.
+
+```json
+"output": {
+  "path": "./output/notes.json",
+  "format": "stix",
+  "columns": ["Title", "Content"],
+  "stix": {
+    "object_type": "note",
+    "properties": {
+      "Title": "abstract",
+      "Content": "content"
+    },
+    "static": {
+      "object_refs": ["indicator--00000000-0000-4000-8000-000000000001"]
+    }
+  }
+}
+```
+
+The tool generates Bundle and object IDs and STIX 2.1 timestamps by default; set `bundle_id`, `timestamp`, `add_timestamps`, or `static` inside `output.stix` when your integration needs specific values. It checks the Bundle/object envelope, but does not perform full object-type schema validation—configure all properties required by your chosen STIX object type. `note` is the default object type.
+
 ### Transformations
 
 Transformations run in the configured order for each output field. Available types:
@@ -163,7 +221,7 @@ Validation rules support `required`, `date` (with `format`), `number`, and `rege
 - `reject` — write the normalized row and `_error` message to `rejects_path`.
 - `skip` — omit the row and record it in the report.
 
-For CSV, `on_malformed_row` controls rows that are too short for the requested mapped positions: `error` (default), `skip`, or `pad` (use empty values for absent fields). For JSONL, it controls malformed JSON records: `error` or `skip`.
+For CSV, `on_malformed_row` controls rows that are too short for the requested mapped positions: `error` (default), `skip`, or `pad` (use empty values for absent fields). For JSONL, JSON, and STIX, it controls invalid records: `error` or `skip`. A syntactically invalid JSON/STIX document always stops the job because its records cannot be read safely.
 
 ### Deduplication and reporting
 

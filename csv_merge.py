@@ -17,6 +17,7 @@ import sqlite3
 import sys
 import tempfile
 import time
+import uuid
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -54,12 +55,18 @@ def config_path(config: dict[str, Any], value: str) -> Path:
 
 
 def input_format(source: dict[str, Any]) -> str:
-    """Return the explicit source format, or infer JSONL from its extension."""
+    """Return the explicit source format, or infer it from a common extension."""
     source_format = source.get("format")
     if source_format is None:
-        source_format = "jsonl" if str(source.get("path", "")).lower().endswith(".jsonl") else "csv"
-    if source_format not in {"csv", "jsonl"}:
-        raise ConfigError("Each input format must be 'csv' or 'jsonl'.")
+        suffix = str(source.get("path", "")).lower()
+        if suffix.endswith(".jsonl"):
+            source_format = "jsonl"
+        elif suffix.endswith(".json"):
+            source_format = "json"
+        else:
+            source_format = "csv"
+    if source_format not in {"csv", "jsonl", "json", "stix"}:
+        raise ConfigError("Each input format must be 'csv', 'jsonl', 'json', or 'stix'.")
     return source_format
 
 
@@ -141,11 +148,35 @@ def validate_config(config: dict[str, Any], check_inputs: bool = True) -> list[s
     output = config["output"]
     if not isinstance(output.get("path"), str) or not output["path"]:
         raise ConfigError("output.path must be a non-empty path.")
+    output_format = output.get("format", "csv")
+    if output_format not in {"csv", "json", "stix"}:
+        raise ConfigError("output.format must be 'csv', 'json', or 'stix'.")
     csv_options(output, ",")
     if output.get("mode", "replace") not in {"replace", "append"}:
         raise ConfigError("output.mode must be 'replace' or 'append'.")
+    if output_format != "csv" and output.get("mode", "replace") == "append":
+        raise ConfigError("output.mode 'append' is available only for CSV output.")
     if output.get("mode", "replace") == "append" and output.get("atomic_write", False):
         raise ConfigError("atomic_write is only available with output.mode 'replace'.")
+    if output_format == "stix":
+        stix = output.get("stix")
+        if not isinstance(stix, dict):
+            raise ConfigError("output.stix must define STIX Bundle settings for STIX output.")
+        object_type = stix.get("object_type", "note")
+        if not isinstance(object_type, str) or not object_type:
+            raise ConfigError("output.stix.object_type must be a non-empty STIX object type.")
+        properties = stix.get("properties", {})
+        if not isinstance(properties, dict):
+            raise ConfigError("output.stix.properties must map output columns to STIX property names.")
+        if any(column not in columns or not isinstance(property_name, str) or not property_name for column, property_name in properties.items()):
+            raise ConfigError("STIX property mappings must map output columns to non-empty property names.")
+        static = stix.get("static", {})
+        if not isinstance(static, dict):
+            raise ConfigError("output.stix.static must be an object.")
+        try:
+            json.dumps(static)
+        except (TypeError, ValueError) as error:
+            raise ConfigError("output.stix.static must contain JSON-compatible values.") from error
 
     inputs = config.get("inputs")
     if not isinstance(inputs, list) or not inputs:
@@ -166,7 +197,7 @@ def validate_config(config: dict[str, Any], check_inputs: bool = True) -> list[s
             if "delimiter" in source:
                 csv_options(source)
         elif "header" in source or "delimiter" in source:
-            raise ConfigError(f"inputs[{index}] is JSONL; header and delimiter do not apply.")
+            raise ConfigError(f"inputs[{index}] is {source_kind.upper()}; header and delimiter do not apply.")
         mapping = source.get("mapping")
         if not isinstance(mapping, dict) or not mapping:
             raise ConfigError(f"inputs[{index}].mapping must be a non-empty object.")
@@ -184,8 +215,8 @@ def validate_config(config: dict[str, Any], check_inputs: bool = True) -> list[s
                 raise ConfigError("Numeric source column mappings are 1-based (minimum 1).")
         if source.get("on_malformed_row", "error") not in {"error", "skip", "pad"}:
             raise ConfigError("on_malformed_row must be 'error', 'skip', or 'pad'.")
-        if source_kind == "jsonl" and source.get("on_malformed_row") == "pad":
-            raise ConfigError("JSONL inputs support on_malformed_row 'error' or 'skip', not 'pad'.")
+        if source_kind in {"jsonl", "json", "stix"} and source.get("on_malformed_row") == "pad":
+            raise ConfigError(f"{source_kind.upper()} inputs support on_malformed_row 'error' or 'skip', not 'pad'.")
 
     transforms = config.get("transformations", {})
     if not isinstance(transforms, dict):
@@ -426,6 +457,64 @@ class DiskDeduplicator:
         Path(self.path).unlink(missing_ok=True)
 
 
+class JsonArrayWriter:
+    """Write a JSON array incrementally, avoiding an in-memory output list."""
+
+    def __init__(self, handle: Any) -> None:
+        self.handle = handle
+        self.first = True
+        self.handle.write("[")
+
+    def writerow(self, row: dict[str, str]) -> None:
+        if not self.first:
+            self.handle.write(",")
+        json.dump(row, self.handle, ensure_ascii=False, separators=(",", ":"))
+        self.first = False
+
+    def close(self) -> None:
+        self.handle.write("]\n")
+        self.handle.close()
+
+
+class StixBundleWriter:
+    """Write one configured STIX 2.1 object per normalized row into a Bundle."""
+
+    def __init__(self, handle: Any, specification: dict[str, Any]) -> None:
+        self.handle = handle
+        self.specification = specification
+        self.first = True
+        self.object_type = specification.get("object_type", "note")
+        self.property_map = specification.get("properties", {})
+        self.static = specification.get("static", {})
+        self.timestamp = specification.get("timestamp") or dt.datetime.now(dt.timezone.utc).isoformat(
+            timespec="milliseconds"
+        ).replace("+00:00", "Z")
+        bundle_id = specification.get("bundle_id") or f"bundle--{uuid.uuid4()}"
+        self.handle.write('{"type":"bundle","id":')
+        json.dump(bundle_id, self.handle, ensure_ascii=False)
+        self.handle.write(',"objects":[')
+
+    def writerow(self, row: dict[str, str]) -> None:
+        record = dict(self.static)
+        record["type"] = self.object_type
+        record.setdefault("spec_version", "2.1")
+        record.setdefault("id", f"{self.object_type}--{uuid.uuid4()}")
+        if self.specification.get("add_timestamps", True):
+            record.setdefault("created", self.timestamp)
+            record.setdefault("modified", self.timestamp)
+        for source_column, property_name in self.property_map.items():
+            if row[source_column] != "":
+                record[property_name] = row[source_column]
+        if not self.first:
+            self.handle.write(",")
+        json.dump(record, self.handle, ensure_ascii=False, separators=(",", ":"))
+        self.first = False
+
+    def close(self) -> None:
+        self.handle.write("]}\n")
+        self.handle.close()
+
+
 def atomic_path(destination: Path) -> tuple[Path, Path | None]:
     destination.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent)
@@ -439,6 +528,7 @@ def process(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
     destination = config_path(config, output["path"])
     output_encoding = output.get("encoding", "utf-8")
     output_options = csv_options(output, ",")
+    output_format = output.get("format", "csv")
     mode = output.get("mode", "replace")
     atomic = bool(output.get("atomic_write", mode == "replace")) and mode == "replace" and not dry_run
     target = destination
@@ -469,8 +559,8 @@ def process(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
         if config.get("deduplication", {}).get("enabled", False):
             dedupe = DiskDeduplicator(config["deduplication"]["keys"])
 
-        write_header = mode == "replace" or not destination.exists() or destination.stat().st_size == 0
-        if mode == "append" and destination.exists() and destination.stat().st_size > 0:
+        write_header = output_format == "csv" and (mode == "replace" or not destination.exists() or destination.stat().st_size == 0)
+        if output_format == "csv" and mode == "append" and destination.exists() and destination.stat().st_size > 0:
             with destination.open("r", encoding=output_encoding, newline="") as existing:
                 current_header = next(csv.reader(existing, **output_options), None)
             if current_header != fields:
@@ -479,9 +569,14 @@ def process(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
         writer = None
         if not dry_run:
             output_handle = target.open("w" if mode == "replace" else "a", encoding=output_encoding, newline="")
-            writer = csv.DictWriter(output_handle, fieldnames=fields, extrasaction="ignore", **output_options)
-            if write_header:
-                writer.writeheader()
+            if output_format == "csv":
+                writer = csv.DictWriter(output_handle, fieldnames=fields, extrasaction="ignore", **output_options)
+                if write_header:
+                    writer.writeheader()
+            elif output_format == "json":
+                writer = JsonArrayWriter(output_handle)
+            else:
+                writer = StixBundleWriter(output_handle, output["stix"])
 
         for source in config["inputs"]:
             source_stats: Counter[str] = Counter()
@@ -527,7 +622,7 @@ def process(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
                     "path": str(path), **dict(source_stats), "format": "csv",
                     "header_used": has_header, "delimiter": options["delimiter"],
                 })
-            else:
+            elif source_kind == "jsonl":
                 key_mapping = list(source["mapping"].items())
                 with path.open("r", encoding=encoding, newline="") as handle:
                     for source_row_number, raw_line in enumerate(handle, start=1):
@@ -555,8 +650,64 @@ def process(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
                             dedupe, writer, reject_writer, stats, source_stats,
                         )
                 stats["files"].append({"path": str(path), **dict(source_stats), "format": "jsonl"})
+            else:
+                try:
+                    with path.open("r", encoding=encoding) as handle:
+                        document = json.load(handle)
+                except json.JSONDecodeError as error:
+                    raise RowError(f"{path}: invalid JSON document ({error})") from error
+                if source_kind == "stix":
+                    if not isinstance(document, dict):
+                        raise RowError(f"{path}: a STIX document must be an object or Bundle.")
+                    if document.get("type") == "bundle":
+                        if not isinstance(document.get("id"), str) or not document["id"].startswith("bundle--"):
+                            raise RowError(f"{path}: a STIX Bundle requires an id beginning with 'bundle--'.")
+                        records = document.get("objects", [])
+                        if not isinstance(records, list):
+                            raise RowError(f"{path}: STIX Bundle objects must be a list.")
+                    else:
+                        records = [document]
+                elif isinstance(document, list):
+                    records = document
+                else:
+                    records = [document]
+                for source_row_number, record in enumerate(records, start=1):
+                    stats["rows_read"] += 1
+                    source_stats["rows_read"] += 1
+                    if not isinstance(record, dict):
+                        message = f"{path}:{source_row_number}: JSON records must be objects"
+                        if source.get("on_malformed_row", "error") == "error":
+                            raise RowError(message)
+                        stats["rows_skipped"] += 1
+                        source_stats["rows_skipped"] += 1
+                        continue
+                    if source_kind == "stix" and (
+                        not isinstance(record.get("type"), str)
+                        or not isinstance(record.get("id"), str)
+                        or not record["id"].startswith(f"{record['type']}--")
+                    ):
+                        message = f"{path}:{source_row_number}: STIX objects require type-prefixed string ids"
+                        if source.get("on_malformed_row", "error") == "error":
+                            raise RowError(message)
+                        stats["rows_skipped"] += 1
+                        source_stats["rows_skipped"] += 1
+                        continue
+                    row = {field: "" for field in fields}
+                    for source_key, target_field in source["mapping"].items():
+                        row[target_field] = json_value_to_csv(record.get(source_key))
+                    if output.get("add_provenance", False):
+                        row["source_file"] = str(path)
+                        row["source_row"] = str(source_row_number)
+                    handle_normalized_row(
+                        row, path, source_row_number, config, validation, validation_rules,
+                        dedupe, writer, reject_writer, stats, source_stats,
+                    )
+                stats["files"].append({"path": str(path), **dict(source_stats), "format": source_kind})
         if output_handle:
-            output_handle.close()
+            if isinstance(writer, (JsonArrayWriter, StixBundleWriter)):
+                writer.close()
+            else:
+                output_handle.close()
             output_handle = None
         if atomic and temporary:
             os.replace(temporary, destination)
@@ -575,9 +726,9 @@ def process(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
 
 def inspect_file(path: Path, encoding: str, delimiter: str | None, source_format: str = "auto") -> dict[str, Any]:
     if source_format == "auto":
-        source_format = "jsonl" if path.suffix.lower() == ".jsonl" else "csv"
-    if source_format not in {"csv", "jsonl"}:
-        raise ConfigError("inspect format must be 'csv', 'jsonl', or 'auto'.")
+        source_format = "jsonl" if path.suffix.lower() == ".jsonl" else "json" if path.suffix.lower() == ".json" else "csv"
+    if source_format not in {"csv", "jsonl", "json", "stix"}:
+        raise ConfigError("inspect format must be 'csv', 'jsonl', 'json', 'stix', or 'auto'.")
     if source_format == "jsonl":
         rows: list[Any] = []
         with path.open("r", encoding=encoding) as handle:
@@ -593,6 +744,32 @@ def inspect_file(path: Path, encoding: str, delimiter: str | None, source_format
                 rows.append(record)
         keys = sorted({key for row in rows for key in row})
         return {"path": str(path), "encoding": encoding, "format": "jsonl", "sample_keys": keys, "sample_rows": rows}
+    if source_format in {"json", "stix"}:
+        try:
+            with path.open("r", encoding=encoding) as handle:
+                document = json.load(handle)
+        except json.JSONDecodeError as error:
+            raise ConfigError(f"{path}: invalid JSON document ({error})") from error
+        if source_format == "stix":
+            if not isinstance(document, dict):
+                raise ConfigError(f"{path}: a STIX document must be an object or Bundle.")
+            rows = document.get("objects", []) if document.get("type") == "bundle" else [document]
+            if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+                raise ConfigError(f"{path}: STIX Bundle objects must be an object list.")
+            return {
+                "path": str(path), "encoding": encoding, "format": "stix",
+                "bundle_id": document.get("id") if document.get("type") == "bundle" else None,
+                "object_count": len(rows), "sample_keys": sorted({key for row in rows[:5] for key in row}),
+                "sample_rows": rows[:5],
+            }
+        rows = document if isinstance(document, list) else [document]
+        if not all(isinstance(row, dict) for row in rows):
+            raise ConfigError(f"{path}: JSON input must be an object or a list of objects.")
+        return {
+            "path": str(path), "encoding": encoding, "format": "json",
+            "record_count": len(rows), "sample_keys": sorted({key for row in rows[:5] for key in row}),
+            "sample_rows": rows[:5],
+        }
     detected_delimiter, sample = detect_dialect(path, encoding)
     used_delimiter = delimiter or detected_delimiter
     with path.open("r", encoding=encoding, newline="") as handle:
@@ -618,16 +795,16 @@ def write_json(value: dict[str, Any], path: str | None = None) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Transform CSV and JSONL inputs into a standardized CSV output.")
+    parser = argparse.ArgumentParser(description="Transform CSV, JSON, JSONL, and STIX inputs into configured output.")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    inspect_parser = subparsers.add_parser("inspect", help="Show a CSV or JSONL sample and likely layout.")
+    inspect_parser = subparsers.add_parser("inspect", help="Show a CSV, JSON, JSONL, or STIX sample and layout.")
     inspect_parser.add_argument("path", type=Path)
     inspect_parser.add_argument("--encoding", default="utf-8")
     inspect_parser.add_argument("--delimiter")
-    inspect_parser.add_argument("--format", choices=("auto", "csv", "jsonl"), default="auto")
+    inspect_parser.add_argument("--format", choices=("auto", "csv", "json", "jsonl", "stix"), default="auto")
     validate_parser = subparsers.add_parser("validate", help="Validate a job configuration without writing output.")
     validate_parser.add_argument("--config", required=True, type=Path)
-    run_parser = subparsers.add_parser("run", help="Run a CSV/JSONL transformation job.")
+    run_parser = subparsers.add_parser("run", help="Run a CSV, JSON, JSONL, or STIX transformation job.")
     run_parser.add_argument("--config", required=True, type=Path)
     run_parser.add_argument("--dry-run", action="store_true", help="Process and report without producing files.")
     run_parser.add_argument("--report", help="Write the run summary to this JSON file as well as stdout.")

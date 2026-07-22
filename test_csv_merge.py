@@ -116,6 +116,75 @@ class CsvMergeTests(unittest.TestCase):
                 {"Place": "Utrecht", "Name": "Bob", "Active": "false", "Tags": ""},
             ])
 
+    def test_json_input_and_output_use_a_json_object_list(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / "people.json").write_text(
+                json.dumps([{"city": "amsterdam", "name": "Alice"}, {"city": "utrecht", "name": "Bob"}]),
+                encoding="utf-8",
+            )
+            config = {
+                "output": {"path": "out/people.json", "format": "json", "columns": ["Place", "Name"]},
+                "inputs": [{"path": "people.json", "format": "json", "mapping": {"city": "Place", "name": "Name"}}],
+                "transformations": {"Place": [{"type": "title_case"}]},
+            }
+            config_path = directory / "job.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            report = csv_merge.process(csv_merge.load_config(config_path))
+            self.assertEqual(report["rows_written"], 2)
+            self.assertEqual(
+                json.loads((directory / "out/people.json").read_text(encoding="utf-8")),
+                [{"Place": "Amsterdam", "Name": "Alice"}, {"Place": "Utrecht", "Name": "Bob"}],
+            )
+
+    def test_stix_bundle_input_and_output(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            stix_input = {
+                "type": "bundle",
+                "id": "bundle--00000000-0000-4000-8000-000000000001",
+                "objects": [{
+                    "type": "indicator",
+                    "spec_version": "2.1",
+                    "id": "indicator--00000000-0000-4000-8000-000000000002",
+                    "created": "2026-07-22T12:00:00.000Z",
+                    "modified": "2026-07-22T12:00:00.000Z",
+                    "name": "Suspicious domain",
+                    "pattern": "[domain-name:value = 'example.test']",
+                    "pattern_type": "stix",
+                    "valid_from": "2026-07-22T12:00:00.000Z",
+                }],
+            }
+            (directory / "input.stix").write_text(json.dumps(stix_input), encoding="utf-8")
+            config = {
+                "output": {
+                    "path": "out/notes.json",
+                    "format": "stix",
+                    "columns": ["Name", "Pattern"],
+                    "stix": {
+                        "object_type": "note",
+                        "properties": {"Name": "abstract", "Pattern": "content"},
+                        "static": {"object_refs": ["indicator--00000000-0000-4000-8000-000000000002"]},
+                        "timestamp": "2026-07-22T12:00:00.000Z",
+                    },
+                },
+                "inputs": [{
+                    "path": "input.stix",
+                    "format": "stix",
+                    "mapping": {"name": "Name", "pattern": "Pattern"},
+                }],
+            }
+            config_path = directory / "job.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            report = csv_merge.process(csv_merge.load_config(config_path))
+            self.assertEqual(report["rows_written"], 1)
+            bundle = json.loads((directory / "out/notes.json").read_text(encoding="utf-8"))
+            self.assertEqual(bundle["type"], "bundle")
+            self.assertTrue(bundle["id"].startswith("bundle--"))
+            self.assertEqual(bundle["objects"][0]["type"], "note")
+            self.assertEqual(bundle["objects"][0]["abstract"], "Suspicious domain")
+            self.assertEqual(bundle["objects"][0]["content"], "[domain-name:value = 'example.test']")
+
 
 if __name__ == "__main__":
     unittest.main()
