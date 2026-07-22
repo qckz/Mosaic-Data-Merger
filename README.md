@@ -38,6 +38,37 @@ Start by copying [example-job.json](example-job.json), then update its input and
 - `validation`: data-quality rules and how invalid records are handled.
 - `deduplication`: optional bounded-memory duplicate detection.
 
+### Output options
+
+`output` defines the target CSV and is required.
+
+| Option | Required | Meaning |
+|---|---:|---|
+| `path` | Yes | Output filename and location. Its parent directories are created when needed. |
+| `columns` | Yes | Ordered output header names. Every mapping target must appear here. |
+| `delimiter` | No | One-character CSV delimiter; defaults to `,`. |
+| `encoding` | No | Output text encoding; defaults to `utf-8`. |
+| `mode` | No | `replace` (default) creates a new file; `append` adds rows to a compatible existing file. |
+| `atomic_write` | No | With `replace` (the default), write a temporary file and replace the destination only after success. |
+| `add_provenance` | No | Adds `source_file` and `source_row` columns automatically. |
+
+Appending checks that the existing header is exactly the configured output schema. `atomic_write` cannot be used with append mode.
+
+### Input options
+
+Each item in `inputs` requires `path` and `mapping`.
+
+| Option | CSV | JSONL | Meaning |
+|---|:---:|:---:|---|
+| `format` | Optional | Optional | `csv` or `jsonl`. Files ending in `.jsonl` default to JSONL; all other files default to CSV. |
+| `encoding` | Optional | Optional | Source encoding; defaults to `utf-8`. |
+| `mapping` | Yes | Yes | Source field-to-output-column mapping. |
+| `on_malformed_row` | Optional | Optional | CSV: `error`, `skip`, or `pad`; JSONL: `error` or `skip`. |
+| `header` | Optional | No | `true` (default), `false`, or `auto`; applies only to CSV. |
+| `delimiter` | Optional | No | One-character input separator. If omitted, the tool attempts CSV dialect detection. |
+| `quotechar`, `escapechar` | Optional | No | One-character CSV quote/escape settings. |
+| `doublequote`, `skipinitialspace`, `strict` | Optional | No | CSV parser behavior flags. |
+
 ### Mapping fields
 
 `output.columns` fixes the exact column names and order. Every input `mapping` maps a source field to one of those names.
@@ -59,6 +90,8 @@ For a source with headers, source names are supported alongside positions:
   "mapping": { "City": "Place", "Customer name": "Name", "5": "Date" }
 }
 ```
+
+The same output field may be supplied by different inputs. For example, column `1` from a headerless CSV and key `city` from a JSONL file can both map to `Place`.
 
 A field may be mapped to the same output field in different input files. Missing fields in a particular source are emitted empty, and transformations such as `set_default` can fill them. Within a single source, mapping two source fields to one output field is rejected to prevent accidental overwrites. Any or all source fields can be mapped; unmapped source fields are ignored.
 
@@ -93,9 +126,36 @@ Transformations run in the configured order for each output field. Available typ
 - `null_if` (`values` array)
 - `date_format` (`input_formats` array and `output_format`)
 
+For example, this replaces a missing place, removes surrounding whitespace, and standardizes a date:
+
+```json
+"transformations": {
+  "Place": [
+    { "type": "trim" },
+    { "type": "set_default", "value": "Unknown" }
+  ],
+  "Date": [
+    {
+      "type": "date_format",
+      "input_formats": ["%d-%m-%Y", "%Y/%m/%d"],
+      "output_format": "%Y-%m-%d"
+    }
+  ]
+}
+```
+
 ### Filters and validation
 
 All filters must match for a row to be written. Operators are `not_empty`, `empty`, `equals`, `not_equals`, `contains`, `in` (with `values`), and `regex`.
+
+Examples:
+
+```json
+"filters": [
+  { "column": "Name", "operator": "not_empty" },
+  { "column": "Place", "operator": "in", "values": ["Amsterdam", "Utrecht"] }
+]
+```
 
 Validation rules support `required`, `date` (with `format`), `number`, and `regex` (with `pattern`). Set `validation.on_error` to:
 
@@ -104,6 +164,20 @@ Validation rules support `required`, `date` (with `format`), `number`, and `rege
 - `skip` — omit the row and record it in the report.
 
 For CSV, `on_malformed_row` controls rows that are too short for the requested mapped positions: `error` (default), `skip`, or `pad` (use empty values for absent fields). For JSONL, it controls malformed JSON records: `error` or `skip`.
+
+### Deduplication and reporting
+
+To retain only the first row for each combination of output values, enable deduplication:
+
+```json
+"deduplication": {
+  "enabled": true,
+  "keys": ["Place", "Name"],
+  "keep": "first"
+}
+```
+
+Duplicate tracking uses temporary disk-backed SQLite storage rather than retaining all source rows in memory. Each run prints a JSON report with per-file and total read, written, filtered, rejected, skipped, and deduplicated row counts. Add `--report ./output/report.json` to store the same report in a file.
 
 ### Large files and safety
 

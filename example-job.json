@@ -29,6 +29,17 @@
         "Customer name": "Name",
         "Created at": "Date"
       }
+    },
+    {
+      "path": "./input/customers.jsonl",
+      "format": "jsonl",
+      "encoding": "utf-8",
+      "mapping": {
+        "city": "Place",
+        "full_name": "Name",
+        "created_at": "Date"
+      },
+      "on_malformed_row": "skip"
     }
   ],
   "transformations": {
