@@ -19,7 +19,7 @@ import tempfile
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 
 class ConfigError(ValueError):
@@ -51,6 +51,29 @@ def config_path(config: dict[str, Any], value: str) -> Path:
     if path.is_absolute():
         return path
     return Path(config.get("_config_directory", Path.cwd())) / path
+
+
+def input_format(source: dict[str, Any]) -> str:
+    """Return the explicit source format, or infer JSONL from its extension."""
+    source_format = source.get("format")
+    if source_format is None:
+        source_format = "jsonl" if str(source.get("path", "")).lower().endswith(".jsonl") else "csv"
+    if source_format not in {"csv", "jsonl"}:
+        raise ConfigError("Each input format must be 'csv' or 'jsonl'.")
+    return source_format
+
+
+def json_value_to_csv(value: Any) -> str:
+    """Keep JSON scalar values legible and nested values valid in one CSV field."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return str(value)
 
 
 def detect_dialect(path: Path, encoding: str) -> tuple[str, str]:
@@ -135,11 +158,15 @@ def validate_config(config: dict[str, Any], check_inputs: bool = True) -> list[s
             raise ConfigError(f"inputs[{index}].path must be a non-empty path.")
         if check_inputs and not config_path(config, path).is_file():
             raise ConfigError(f"Input file does not exist: {path}")
-        header = source.get("header", True)
-        if header not in {True, False, "auto"}:
-            raise ConfigError(f"inputs[{index}].header must be true, false, or 'auto'.")
-        if "delimiter" in source:
-            csv_options(source)
+        source_kind = input_format(source)
+        if source_kind == "csv":
+            header = source.get("header", True)
+            if header not in {True, False, "auto"}:
+                raise ConfigError(f"inputs[{index}].header must be true, false, or 'auto'.")
+            if "delimiter" in source:
+                csv_options(source)
+        elif "header" in source or "delimiter" in source:
+            raise ConfigError(f"inputs[{index}] is JSONL; header and delimiter do not apply.")
         mapping = source.get("mapping")
         if not isinstance(mapping, dict) or not mapping:
             raise ConfigError(f"inputs[{index}].mapping must be a non-empty object.")
@@ -153,10 +180,12 @@ def validate_config(config: dict[str, Any], check_inputs: bool = True) -> list[s
         for source_column in mapping:
             if not isinstance(source_column, str) or not source_column:
                 raise ConfigError(f"inputs[{index}] has an invalid mapping key.")
-            if source_column.isdigit() and int(source_column) < 1:
+            if source_kind == "csv" and source_column.isdigit() and int(source_column) < 1:
                 raise ConfigError("Numeric source column mappings are 1-based (minimum 1).")
         if source.get("on_malformed_row", "error") not in {"error", "skip", "pad"}:
             raise ConfigError("on_malformed_row must be 'error', 'skip', or 'pad'.")
+        if source_kind == "jsonl" and source.get("on_malformed_row") == "pad":
+            raise ConfigError("JSONL inputs support on_malformed_row 'error' or 'skip', not 'pad'.")
 
     transforms = config.get("transformations", {})
     if not isinstance(transforms, dict):
@@ -225,6 +254,49 @@ def make_index_mapping(
         else:
             result.append((header_index[source_key], target))
     return result
+
+
+def handle_normalized_row(
+    row: dict[str, str],
+    path: Path,
+    source_row_number: int,
+    config: dict[str, Any],
+    validation: dict[str, Any],
+    validation_rules: list[dict[str, Any]],
+    dedupe: "DiskDeduplicator | None",
+    writer: csv.DictWriter | None,
+    reject_writer: csv.DictWriter | None,
+    stats: dict[str, Any],
+    source_stats: Counter[str],
+) -> None:
+    try:
+        apply_transformations(row, config)
+        if not all(filter_matches(row, condition) for condition in config.get("filters", [])):
+            stats["rows_filtered"] += 1
+            source_stats["rows_filtered"] += 1
+            return
+        validate_row(row, validation_rules)
+    except RowError as error:
+        policy = validation.get("on_error", "error")
+        if policy == "error":
+            raise RowError(f"{path}:{source_row_number}: {error}") from error
+        if policy == "reject":
+            stats["rows_rejected"] += 1
+            source_stats["rows_rejected"] += 1
+            if reject_writer:
+                reject_writer.writerow({**row, "_error": str(error)})
+        else:
+            stats["rows_skipped"] += 1
+            source_stats["rows_skipped"] += 1
+        return
+    if dedupe and dedupe.seen_before(row):
+        stats["rows_deduplicated"] += 1
+        source_stats["rows_deduplicated"] += 1
+        return
+    stats["rows_written"] += 1
+    source_stats["rows_written"] += 1
+    if writer:
+        writer.writerow(row)
 
 
 def apply_action(value: str, action: dict[str, Any]) -> str:
@@ -415,65 +487,74 @@ def process(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
             source_stats: Counter[str] = Counter()
             path = config_path(config, source["path"])
             encoding = source.get("encoding", "utf-8")
-            delimiter = source.get("delimiter")
-            if delimiter is None:
-                delimiter, _ = detect_dialect(path, encoding)
-            options = csv_options(source, delimiter)
-            has_header = resolve_header(source, path, encoding, options)
-            with path.open("r", encoding=encoding, newline="") as handle:
-                reader = csv.reader(handle, **options)
-                header = next(reader, None) if has_header else None
-                if has_header and header is None:
-                    raise ConfigError(f"Input {path} declares a header but is empty.")
-                index_mapping = make_index_mapping(source, header, fields)
-                max_index = max((index for index, _ in index_mapping), default=-1)
-                for source_row_number, values in enumerate(reader, start=2 if has_header else 1):
-                    stats["rows_read"] += 1
-                    source_stats["rows_read"] += 1
-                    row = {field: "" for field in fields}
-                    if len(values) <= max_index:
-                        malformed = source.get("on_malformed_row", "error")
-                        message = f"row has {len(values)} column(s); mapping requires column {max_index + 1}"
-                        if malformed == "error":
-                            raise RowError(f"{path}:{source_row_number}: {message}")
-                        if malformed == "skip":
+            source_kind = input_format(source)
+            if source_kind == "csv":
+                delimiter = source.get("delimiter")
+                if delimiter is None:
+                    delimiter, _ = detect_dialect(path, encoding)
+                options = csv_options(source, delimiter)
+                has_header = resolve_header(source, path, encoding, options)
+                with path.open("r", encoding=encoding, newline="") as handle:
+                    reader = csv.reader(handle, **options)
+                    header = next(reader, None) if has_header else None
+                    if has_header and header is None:
+                        raise ConfigError(f"Input {path} declares a header but is empty.")
+                    index_mapping = make_index_mapping(source, header, fields)
+                    max_index = max((index for index, _ in index_mapping), default=-1)
+                    for source_row_number, values in enumerate(reader, start=2 if has_header else 1):
+                        stats["rows_read"] += 1
+                        source_stats["rows_read"] += 1
+                        row = {field: "" for field in fields}
+                        if len(values) <= max_index:
+                            malformed = source.get("on_malformed_row", "error")
+                            message = f"row has {len(values)} column(s); mapping requires column {max_index + 1}"
+                            if malformed == "error":
+                                raise RowError(f"{path}:{source_row_number}: {message}")
+                            if malformed == "skip":
+                                stats["rows_skipped"] += 1
+                                source_stats["rows_skipped"] += 1
+                                continue
+                        for index, target_field in index_mapping:
+                            row[target_field] = values[index] if index < len(values) else ""
+                        if output.get("add_provenance", False):
+                            row["source_file"] = str(path)
+                            row["source_row"] = str(source_row_number)
+                        handle_normalized_row(
+                            row, path, source_row_number, config, validation, validation_rules,
+                            dedupe, writer, reject_writer, stats, source_stats,
+                        )
+                stats["files"].append({
+                    "path": str(path), **dict(source_stats), "format": "csv",
+                    "header_used": has_header, "delimiter": options["delimiter"],
+                })
+            else:
+                key_mapping = list(source["mapping"].items())
+                with path.open("r", encoding=encoding, newline="") as handle:
+                    for source_row_number, raw_line in enumerate(handle, start=1):
+                        stats["rows_read"] += 1
+                        source_stats["rows_read"] += 1
+                        try:
+                            record = json.loads(raw_line)
+                            if not isinstance(record, dict):
+                                raise ValueError("JSONL records must be JSON objects")
+                        except (json.JSONDecodeError, ValueError) as error:
+                            message = f"{path}:{source_row_number}: invalid JSONL record ({error})"
+                            if source.get("on_malformed_row", "error") == "error":
+                                raise RowError(message) from error
                             stats["rows_skipped"] += 1
                             source_stats["rows_skipped"] += 1
                             continue
-                    for index, target_field in index_mapping:
-                        row[target_field] = values[index] if index < len(values) else ""
-                    if output.get("add_provenance", False):
-                        row["source_file"] = str(path)
-                        row["source_row"] = str(source_row_number)
-                    try:
-                        apply_transformations(row, config)
-                        if not all(filter_matches(row, condition) for condition in config.get("filters", [])):
-                            stats["rows_filtered"] += 1
-                            source_stats["rows_filtered"] += 1
-                            continue
-                        validate_row(row, validation_rules)
-                    except RowError as error:
-                        policy = validation.get("on_error", "error")
-                        if policy == "error":
-                            raise RowError(f"{path}:{source_row_number}: {error}") from error
-                        if policy == "reject":
-                            stats["rows_rejected"] += 1
-                            source_stats["rows_rejected"] += 1
-                            if reject_writer:
-                                reject_writer.writerow({**row, "_error": str(error)})
-                        else:
-                            stats["rows_skipped"] += 1
-                            source_stats["rows_skipped"] += 1
-                        continue
-                    if dedupe and dedupe.seen_before(row):
-                        stats["rows_deduplicated"] += 1
-                        source_stats["rows_deduplicated"] += 1
-                        continue
-                    stats["rows_written"] += 1
-                    source_stats["rows_written"] += 1
-                    if writer:
-                        writer.writerow(row)
-            stats["files"].append({"path": str(path), **dict(source_stats), "header_used": has_header, "delimiter": options["delimiter"]})
+                        row = {field: "" for field in fields}
+                        for source_key, target_field in key_mapping:
+                            row[target_field] = json_value_to_csv(record.get(source_key))
+                        if output.get("add_provenance", False):
+                            row["source_file"] = str(path)
+                            row["source_row"] = str(source_row_number)
+                        handle_normalized_row(
+                            row, path, source_row_number, config, validation, validation_rules,
+                            dedupe, writer, reject_writer, stats, source_stats,
+                        )
+                stats["files"].append({"path": str(path), **dict(source_stats), "format": "jsonl"})
         if output_handle:
             output_handle.close()
             output_handle = None
@@ -492,7 +573,26 @@ def process(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
     return stats
 
 
-def inspect_file(path: Path, encoding: str, delimiter: str | None) -> dict[str, Any]:
+def inspect_file(path: Path, encoding: str, delimiter: str | None, source_format: str = "auto") -> dict[str, Any]:
+    if source_format == "auto":
+        source_format = "jsonl" if path.suffix.lower() == ".jsonl" else "csv"
+    if source_format not in {"csv", "jsonl"}:
+        raise ConfigError("inspect format must be 'csv', 'jsonl', or 'auto'.")
+    if source_format == "jsonl":
+        rows: list[Any] = []
+        with path.open("r", encoding=encoding) as handle:
+            for source_row_number, raw_line in enumerate(handle, start=1):
+                if len(rows) == 5:
+                    break
+                try:
+                    record = json.loads(raw_line)
+                except json.JSONDecodeError as error:
+                    raise ConfigError(f"{path}:{source_row_number}: invalid JSONL record ({error})") from error
+                if not isinstance(record, dict):
+                    raise ConfigError(f"{path}:{source_row_number}: JSONL records must be JSON objects.")
+                rows.append(record)
+        keys = sorted({key for row in rows for key in row})
+        return {"path": str(path), "encoding": encoding, "format": "jsonl", "sample_keys": keys, "sample_rows": rows}
     detected_delimiter, sample = detect_dialect(path, encoding)
     used_delimiter = delimiter or detected_delimiter
     with path.open("r", encoding=encoding, newline="") as handle:
@@ -501,7 +601,7 @@ def inspect_file(path: Path, encoding: str, delimiter: str | None) -> dict[str, 
         for _, row in zip(range(5), reader):
             rows.append(row)
     return {
-        "path": str(path), "encoding": encoding, "detected_delimiter": detected_delimiter,
+        "path": str(path), "encoding": encoding, "format": "csv", "detected_delimiter": detected_delimiter,
         "delimiter_used": used_delimiter, "header_likely": header_is_likely(sample, used_delimiter),
         "sample_rows": rows,
     }
@@ -518,15 +618,16 @@ def write_json(value: dict[str, Any], path: str | None = None) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Merge heterogeneous CSV inputs using a streaming JSON-defined job.")
+    parser = argparse.ArgumentParser(description="Transform CSV and JSONL inputs into a standardized CSV output.")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    inspect_parser = subparsers.add_parser("inspect", help="Show a CSV sample and likely layout.")
+    inspect_parser = subparsers.add_parser("inspect", help="Show a CSV or JSONL sample and likely layout.")
     inspect_parser.add_argument("path", type=Path)
     inspect_parser.add_argument("--encoding", default="utf-8")
     inspect_parser.add_argument("--delimiter")
+    inspect_parser.add_argument("--format", choices=("auto", "csv", "jsonl"), default="auto")
     validate_parser = subparsers.add_parser("validate", help="Validate a job configuration without writing output.")
     validate_parser.add_argument("--config", required=True, type=Path)
-    run_parser = subparsers.add_parser("run", help="Run a CSV merge job.")
+    run_parser = subparsers.add_parser("run", help="Run a CSV/JSONL transformation job.")
     run_parser.add_argument("--config", required=True, type=Path)
     run_parser.add_argument("--dry-run", action="store_true", help="Process and report without producing files.")
     run_parser.add_argument("--report", help="Write the run summary to this JSON file as well as stdout.")
@@ -536,7 +637,7 @@ def main() -> int:
         if args.command == "inspect":
             if not args.path.is_file():
                 raise ConfigError(f"Input file does not exist: {args.path}")
-            write_json(inspect_file(args.path, args.encoding, args.delimiter))
+            write_json(inspect_file(args.path, args.encoding, args.delimiter, args.format))
         elif args.command == "validate":
             config = load_config(args.config)
             fields = validate_config(config)

@@ -1,6 +1,8 @@
 # CSV Manipulator
 
-`csv_merge.py` merges CSV files with different delimiters, layouts, and header conventions into one standardized CSV. It streams records rather than loading all input rows into memory, making it suitable for very large files. It needs only Python 3.10+ and the standard library.
+`csv_merge.py` transforms CSV and JSONL files into one standardized CSV. It streams records rather than loading all input rows into memory, making it suitable for very large files. It needs only Python 3.10+ and the standard library.
+
+A job may have one input (a transformation) or many inputs (a merge). The output is always CSV.
 
 ## Run a job
 
@@ -20,6 +22,7 @@ Inspect an unfamiliar source before writing its configuration:
 ```bash
 python3 csv_merge.py inspect ./input/source.csv
 python3 csv_merge.py inspect ./input/source.csv --encoding windows-1252 --delimiter ';'
+python3 csv_merge.py inspect ./input/events.jsonl
 ```
 
 The commands print JSON, which makes their output easy to store in automation logs.
@@ -29,7 +32,7 @@ The commands print JSON, which makes their output easy to store in automation lo
 Start by copying [example-job.json](example-job.json), then update its input and output paths for your job. Relative paths are resolved from the configuration file's directory (not the current terminal directory). The top-level fields are:
 
 - `output`: destination, output schema, delimiter/encoding, output mode, and provenance columns.
-- `inputs`: one specification per source file, including its layout and field mapping.
+- `inputs`: one specification per CSV or JSONL source file, including its layout and field mapping.
 - `transformations`: cleanup steps applied to normalized output fields.
 - `filters`: conditions a row must satisfy to be included.
 - `validation`: data-quality rules and how invalid records are handled.
@@ -57,9 +60,28 @@ For a source with headers, source names are supported alongside positions:
 }
 ```
 
-A field may be mapped to the same output field in different input files. Missing fields in a particular source are emitted empty, and transformations such as `set_default` can fill them. Within a single source, mapping two source fields to one output field is rejected to prevent accidental overwrites.
+A field may be mapped to the same output field in different input files. Missing fields in a particular source are emitted empty, and transformations such as `set_default` can fill them. Within a single source, mapping two source fields to one output field is rejected to prevent accidental overwrites. Any or all source fields can be mapped; unmapped source fields are ignored.
 
 Set `header` to `"auto"` only for exploratory or variable sources; explicit `true` or `false` is preferable in production. When `delimiter` is omitted, the tool tries to detect one, but explicit delimiters avoid ambiguity and are faster.
+
+### JSONL inputs
+
+JSONL contains one JSON object per line. Set `"format": "jsonl"`, or omit it for a file whose path ends in `.jsonl`. JSON object keys are the source field names, so mapping is always by key name:
+
+```json
+{
+  "path": "./input/people.jsonl",
+  "format": "jsonl",
+  "mapping": {
+    "city": "Place",
+    "full_name": "Name",
+    "created_at": "Date"
+  },
+  "on_malformed_row": "skip"
+}
+```
+
+`header` and `delimiter` do not apply to JSONL. JSON `null` becomes an empty CSV value, booleans become `true` or `false`, and nested arrays/objects are stored as compact JSON within one CSV field. A malformed JSON line can stop the job (`error`, the default) or be skipped.
 
 ### Transformations
 
@@ -81,7 +103,7 @@ Validation rules support `required`, `date` (with `format`), `number`, and `rege
 - `reject` — write the normalized row and `_error` message to `rejects_path`.
 - `skip` — omit the row and record it in the report.
 
-Input `on_malformed_row` controls rows that are too short for the requested mapped positions: `error` (default), `skip`, or `pad` (use empty values for absent fields).
+For CSV, `on_malformed_row` controls rows that are too short for the requested mapped positions: `error` (default), `skip`, or `pad` (use empty values for absent fields). For JSONL, it controls malformed JSON records: `error` or `skip`.
 
 ### Large files and safety
 

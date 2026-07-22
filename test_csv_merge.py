@@ -86,6 +86,36 @@ class CsvMergeTests(unittest.TestCase):
             with self.assertRaises(csv_merge.ConfigError):
                 csv_merge.process(csv_merge.load_config(config_path))
 
+    def test_one_jsonl_file_transforms_all_mapped_keys_to_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / "people.jsonl").write_text(
+                '{"city":"amsterdam","full_name":"Alice","active":true,"tags":["vip","new"]}\n'
+                '{"city":"utrecht","full_name":"Bob","active":false,"tags":null}\n',
+                encoding="utf-8",
+            )
+            config = {
+                "output": {"path": "out/people.csv", "delimiter": ";", "columns": ["Place", "Name", "Active", "Tags"]},
+                "inputs": [{
+                    "path": "people.jsonl",
+                    "format": "jsonl",
+                    "mapping": {"city": "Place", "full_name": "Name", "active": "Active", "tags": "Tags"},
+                }],
+                "transformations": {"Place": [{"type": "title_case"}]},
+            }
+            config_path = directory / "job.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            report = csv_merge.process(csv_merge.load_config(config_path))
+            self.assertEqual(report["rows_read"], 2)
+            self.assertEqual(report["rows_written"], 2)
+            self.assertEqual(report["files"][0]["format"], "jsonl")
+            with (directory / "out/people.csv").open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle, delimiter=";"))
+            self.assertEqual(rows, [
+                {"Place": "Amsterdam", "Name": "Alice", "Active": "true", "Tags": '["vip","new"]'},
+                {"Place": "Utrecht", "Name": "Bob", "Active": "false", "Tags": ""},
+            ])
+
 
 if __name__ == "__main__":
     unittest.main()
