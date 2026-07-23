@@ -9,6 +9,7 @@ A job may have one input (a transformation) or many inputs (a merge). The output
 ```bash
 python3 csv_merge.py validate --config example-job.json
 python3 csv_merge.py run --config example-job.json --report ./output/report.json
+python3 csv_merge.py run --config example-job.json --verbose
 ```
 
 Use a dry run to execute mappings, transformations, filtering, validation, and deduplication without creating the output or rejects files:
@@ -27,6 +28,14 @@ python3 csv_merge.py inspect ./input/threat-intelligence.json --format stix
 ```
 
 The commands print JSON, which makes their output easy to store in automation logs.
+
+### Diagnostics and progress messages
+
+`validate` reports the format and number of files matched by every input path or wildcard pattern. `run` includes the same `input_patterns` summary plus separate statistics for each processed file.
+
+Use `--verbose` to print progress information to standard error without changing the JSON report on standard output. For CSV inputs, this includes the actual delimiter and header mode used for each file. This is useful for detecting an incorrectly configured delimiter in automated jobs.
+
+When a mapped header name cannot be found, the error now reports the delimiter used and the parsed headers. If the complete header was parsed as a single field and contains another common separator, it explicitly suggests checking the delimiter setting.
 
 ## Job configuration
 
@@ -62,6 +71,7 @@ Each item in `inputs` requires `path` and `mapping`.
 
 | Option | CSV | JSON / JSONL / STIX | Meaning |
 |---|:---:|:---:|---|
+| `path` | Yes | Yes | A single file path or a wildcard pattern such as `./input/list_*.csv`. |
 | `format` | Optional | Optional | `csv`, `json`, `jsonl`, or `stix`. `.jsonl` defaults to JSONL, `.json` defaults to JSON, and other files default to CSV. |
 | `encoding` | Optional | Optional | Source encoding; defaults to `utf-8`. |
 | `mapping` | Yes | Yes | Source field-to-output-column mapping. |
@@ -70,6 +80,25 @@ Each item in `inputs` requires `path` and `mapping`.
 | `delimiter` | Optional | No | One-character input separator. If omitted, the tool attempts CSV dialect detection. |
 | `quotechar`, `escapechar` | Optional | No | One-character CSV quote/escape settings. |
 | `doublequote`, `skipinitialspace`, `strict` | Optional | No | CSV parser behavior flags. |
+
+### Wildcard input paths
+
+`path` may contain standard filename wildcards: `*` (any characters), `?` (one character), character sets such as `[0-9]`, and recursive `**` directory patterns. All matching regular files use the same input settings, so they should share the configured format and layout.
+
+```json
+{
+  "path": "./input/list_*.csv",
+  "format": "csv",
+  "header": false,
+  "delimiter": ",",
+  "mapping": {
+    "1": "Place",
+    "2": "Name"
+  }
+}
+```
+
+Matches are processed in lexically sorted path order (`list_01.csv`, then `list_02.csv`, and so on), one file at a time. A pattern that matches no regular files stops the job with a configuration error rather than silently producing incomplete output. The report retains separate statistics for every expanded file; enable `add_provenance` to retain each source filename and row number in the output.
 
 ### Mapping fields
 

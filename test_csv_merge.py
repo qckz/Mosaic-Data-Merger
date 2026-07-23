@@ -185,6 +185,69 @@ class CsvMergeTests(unittest.TestCase):
             self.assertEqual(bundle["objects"][0]["abstract"], "Suspicious domain")
             self.assertEqual(bundle["objects"][0]["content"], "[domain-name:value = 'example.test']")
 
+    def test_wildcard_input_streams_matching_files_in_name_order(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / "list_02.csv").write_text("Utrecht,Bob\n", encoding="utf-8")
+            (directory / "list_01.csv").write_text("Amsterdam,Alice\n", encoding="utf-8")
+            config = {
+                "output": {
+                    "path": "out/merged.csv",
+                    "columns": ["Place", "Name"],
+                    "add_provenance": True,
+                },
+                "inputs": [{
+                    "path": "list_*.csv",
+                    "header": False,
+                    "mapping": {"1": "Place", "2": "Name"},
+                }],
+            }
+            config_path = directory / "job.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            information: list[str] = []
+            report = csv_merge.process(csv_merge.load_config(config_path), info=information.append)
+            self.assertEqual(report["rows_read"], 2)
+            self.assertEqual(report["input_patterns"], [{"path": "list_*.csv", "format": "csv", "matched_files": 2}])
+            self.assertTrue(any("matched 2 file(s)" in message for message in information))
+            self.assertTrue(any("delimiter=','" in message for message in information))
+            self.assertEqual([item["path"] for item in report["files"]], [
+                str((directory / "list_01.csv").resolve()),
+                str((directory / "list_02.csv").resolve()),
+            ])
+            with (directory / "out/merged.csv").open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual([row["Place"] for row in rows], ["Amsterdam", "Utrecht"])
+
+    def test_wildcard_without_matches_is_a_configuration_error(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            config = {
+                "output": {"path": "out.csv", "columns": ["Value"]},
+                "inputs": [{"path": "missing_*.csv", "header": False, "mapping": {"1": "Value"}}],
+            }
+            config_path = directory / "job.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            with self.assertRaisesRegex(csv_merge.ConfigError, "matched no files"):
+                csv_merge.process(csv_merge.load_config(config_path))
+
+    def test_wrong_csv_delimiter_explains_the_parsed_header(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / "people.csv").write_text("City,Name\nAmsterdam,Alice\n", encoding="utf-8")
+            config = {
+                "output": {"path": "out.csv", "columns": ["Place", "Name"]},
+                "inputs": [{
+                    "path": "people.csv",
+                    "header": True,
+                    "delimiter": ";",
+                    "mapping": {"City": "Place", "Name": "Name"},
+                }],
+            }
+            config_path = directory / "job.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            with self.assertRaisesRegex(csv_merge.ConfigError, "delimiter ';'.*Available headers: 'City,Name'.*contains ','"):
+                csv_merge.process(csv_merge.load_config(config_path))
+
 
 if __name__ == "__main__":
     unittest.main()

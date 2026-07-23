@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import glob
 import json
 import os
 import re
@@ -20,7 +21,7 @@ import time
 import uuid
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 class ConfigError(ValueError):
@@ -52,6 +53,23 @@ def config_path(config: dict[str, Any], value: str) -> Path:
     if path.is_absolute():
         return path
     return Path(config.get("_config_directory", Path.cwd())) / path
+
+
+def expand_input_paths(config: dict[str, Any], value: str) -> list[Path]:
+    """Resolve one input path or a wildcard pattern into sorted regular files."""
+    pattern = config_path(config, value)
+    pattern_text = str(pattern)
+    if glob.has_magic(pattern_text):
+        matches = sorted(
+            (Path(match) for match in glob.glob(pattern_text, recursive=True) if Path(match).is_file()),
+            key=lambda match: str(match),
+        )
+        if not matches:
+            raise ConfigError(f"Input pattern matched no files: {value}")
+        return matches
+    if not pattern.is_file():
+        raise ConfigError(f"Input file does not exist: {value}")
+    return [pattern]
 
 
 def input_format(source: dict[str, Any]) -> str:
@@ -187,8 +205,8 @@ def validate_config(config: dict[str, Any], check_inputs: bool = True) -> list[s
         path = source.get("path")
         if not isinstance(path, str) or not path:
             raise ConfigError(f"inputs[{index}].path must be a non-empty path.")
-        if check_inputs and not config_path(config, path).is_file():
-            raise ConfigError(f"Input file does not exist: {path}")
+        if check_inputs:
+            expand_input_paths(config, path)
         source_kind = input_format(source)
         if source_kind == "csv":
             header = source.get("header", True)
@@ -267,7 +285,7 @@ def resolve_header(source: dict[str, Any], path: Path, encoding: str, options: d
 
 
 def make_index_mapping(
-    source: dict[str, Any], header_row: list[str] | None, output_fields: list[str]
+    source: dict[str, Any], header_row: list[str] | None, output_fields: list[str], delimiter: str
 ) -> list[tuple[int, str]]:
     result: list[tuple[int, str]] = []
     header_index = {name: index for index, name in enumerate(header_row or [])}
@@ -281,7 +299,19 @@ def make_index_mapping(
                 f"Input {source['path']} has no header, so '{source_key}' cannot be mapped by name."
             )
         elif source_key not in header_index:
-            raise ConfigError(f"Input {source['path']} has no header named '{source_key}'.")
+            available = ", ".join(repr(name) for name in header_row)
+            message = (
+                f"Input {source['path']} has no header named {source_key!r} when parsed with "
+                f"delimiter {delimiter!r}. Available headers: {available or '(none)'}."
+            )
+            if len(header_row) == 1:
+                possible = [candidate for candidate in (",", ";", "\t", "|", ":") if candidate != delimiter and candidate in header_row[0]]
+                if possible:
+                    message += (
+                        f" The header was parsed as one field and contains {possible[0]!r}; "
+                        "check the input delimiter configuration."
+                    )
+            raise ConfigError(message)
         else:
             result.append((header_index[source_key], target))
     return result
@@ -522,7 +552,9 @@ def atomic_path(destination: Path) -> tuple[Path, Path | None]:
     return Path(temporary_name), Path(temporary_name)
 
 
-def process(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
+def process(
+    config: dict[str, Any], dry_run: bool = False, info: Callable[[str], None] | None = None
+) -> dict[str, Any]:
     fields = validate_config(config)
     output = config["output"]
     destination = config_path(config, output["path"])
@@ -541,7 +573,7 @@ def process(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
     stats: dict[str, Any] = {
         "output": str(destination), "rows_read": 0, "rows_written": 0, "rows_filtered": 0,
         "rows_rejected": 0, "rows_skipped": 0, "rows_deduplicated": 0, "files": [],
-        "dry_run": dry_run,
+        "input_patterns": [], "dry_run": dry_run,
     }
     validation = config.get("validation", {})
     validation_rules = validation.get("rules", [])
@@ -578,9 +610,21 @@ def process(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
             else:
                 writer = StixBundleWriter(output_handle, output["stix"])
 
+        expanded_inputs = []
         for source in config["inputs"]:
+            paths = expand_input_paths(config, source["path"])
+            source_kind = input_format(source)
+            stats["input_patterns"].append({
+                "path": source["path"], "format": source_kind, "matched_files": len(paths),
+            })
+            if info:
+                info(
+                    f"Input {source['path']!r} matched {len(paths)} file(s) "
+                    f"as {source_kind.upper()}."
+                )
+            expanded_inputs.extend((source, path) for path in paths)
+        for source, path in expanded_inputs:
             source_stats: Counter[str] = Counter()
-            path = config_path(config, source["path"])
             encoding = source.get("encoding", "utf-8")
             source_kind = input_format(source)
             if source_kind == "csv":
@@ -589,12 +633,17 @@ def process(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
                     delimiter, _ = detect_dialect(path, encoding)
                 options = csv_options(source, delimiter)
                 has_header = resolve_header(source, path, encoding, options)
+                if info:
+                    info(
+                        f"Processing {path}: CSV delimiter={options['delimiter']!r}, "
+                        f"header={'yes' if has_header else 'no'}."
+                    )
                 with path.open("r", encoding=encoding, newline="") as handle:
                     reader = csv.reader(handle, **options)
                     header = next(reader, None) if has_header else None
                     if has_header and header is None:
                         raise ConfigError(f"Input {path} declares a header but is empty.")
-                    index_mapping = make_index_mapping(source, header, fields)
+                    index_mapping = make_index_mapping(source, header, fields, options["delimiter"])
                     max_index = max((index for index, _ in index_mapping), default=-1)
                     for source_row_number, values in enumerate(reader, start=2 if has_header else 1):
                         stats["rows_read"] += 1
@@ -602,7 +651,11 @@ def process(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
                         row = {field: "" for field in fields}
                         if len(values) <= max_index:
                             malformed = source.get("on_malformed_row", "error")
-                            message = f"row has {len(values)} column(s); mapping requires column {max_index + 1}"
+                            message = (
+                                f"row parsed as {len(values)} column(s) with delimiter "
+                                f"{options['delimiter']!r}; mapping requires column {max_index + 1}. "
+                                "Check the delimiter or source mapping."
+                            )
                             if malformed == "error":
                                 raise RowError(f"{path}:{source_row_number}: {message}")
                             if malformed == "skip":
@@ -623,6 +676,8 @@ def process(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
                     "header_used": has_header, "delimiter": options["delimiter"],
                 })
             elif source_kind == "jsonl":
+                if info:
+                    info(f"Processing {path}: JSONL.")
                 key_mapping = list(source["mapping"].items())
                 with path.open("r", encoding=encoding, newline="") as handle:
                     for source_row_number, raw_line in enumerate(handle, start=1):
@@ -651,6 +706,8 @@ def process(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
                         )
                 stats["files"].append({"path": str(path), **dict(source_stats), "format": "jsonl"})
             else:
+                if info:
+                    info(f"Processing {path}: {source_kind.upper()}.")
                 try:
                     with path.open("r", encoding=encoding) as handle:
                         document = json.load(handle)
@@ -808,6 +865,7 @@ def main() -> int:
     run_parser.add_argument("--config", required=True, type=Path)
     run_parser.add_argument("--dry-run", action="store_true", help="Process and report without producing files.")
     run_parser.add_argument("--report", help="Write the run summary to this JSON file as well as stdout.")
+    run_parser.add_argument("--verbose", action="store_true", help="Write per-input progress information to stderr.")
     args = parser.parse_args()
     started = time.monotonic()
     try:
@@ -818,10 +876,26 @@ def main() -> int:
         elif args.command == "validate":
             config = load_config(args.config)
             fields = validate_config(config)
-            write_json({"valid": True, "output_columns": fields, "input_count": len(config["inputs"])})
+            write_json({
+                "valid": True,
+                "output_columns": fields,
+                "input_count": len(config["inputs"]),
+                "input_patterns": [
+                    {
+                        "path": source["path"],
+                        "format": input_format(source),
+                        "matched_files": len(expand_input_paths(config, source["path"])),
+                    }
+                    for source in config["inputs"]
+                ],
+            })
         else:
             config = load_config(args.config)
-            report = process(config, dry_run=args.dry_run)
+            report = process(
+                config,
+                dry_run=args.dry_run,
+                info=(lambda message: print(f"info: {message}", file=sys.stderr)) if args.verbose else None,
+            )
             report["duration_seconds"] = round(time.monotonic() - started, 3)
             write_json(report)
             if args.report:
