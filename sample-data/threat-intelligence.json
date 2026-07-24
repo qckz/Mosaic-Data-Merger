@@ -1,0 +1,18 @@
+{
+  "type": "bundle",
+  "id": "bundle--00000000-0000-4000-8000-000000000010",
+  "objects": [
+    {
+      "type": "indicator",
+      "spec_version": "2.1",
+      "id": "indicator--00000000-0000-4000-8000-000000000001",
+      "created": "2026-07-24T12:00:00.000Z",
+      "modified": "2026-07-24T12:00:00.000Z",
+      "name": "Sample suspicious domain",
+      "description": "A STIX sample object",
+      "pattern": "[domain-name:value = 'example.test']",
+      "pattern_type": "stix",
+      "valid_from": "2026-07-24T12:00:00.000Z"
+    }
+  ]
+}

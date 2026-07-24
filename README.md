@@ -41,7 +41,7 @@ When a mapped header name cannot be found, the error now reports the delimiter u
 
 ## Job configuration
 
-Start by copying [example-job.json](example-job.json), then update its input and output paths for your job. For a complete STIX input-to-STIX Bundle output example, use [example-stix-job.json](example-stix-job.json). Relative paths are resolved from the configuration file's directory (not the current terminal directory). The top-level fields are:
+Start by copying [example-job.json](example-job.json), then update its input and output paths for your job. For a complete STIX input-to-STIX Bundle output example, use [example-stix-job.json](example-stix-job.json). For every currently supported configuration option in copyable context, see [example-config-catalog.json](example-config-catalog.json): copy one `*_job` object into your own job file, rather than passing the catalog itself to the tool. Its paths are backed by the small [sample-data](sample-data) set, so you can validate the examples immediately. Relative paths are resolved from the configuration file's directory (not the current terminal directory). The top-level fields are:
 
 - `output`: destination, format, schema, delimiter/encoding, output mode, and provenance columns.
 - `inputs`: one specification per CSV, JSON, JSONL, or STIX source file, including its layout and field mapping.

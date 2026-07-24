@@ -8,6 +8,16 @@ import mosaic_data_merger
 
 
 class CsvMergeTests(unittest.TestCase):
+    def test_configuration_catalog_jobs_validate_against_sample_data(self) -> None:
+        project_directory = Path(__file__).parent
+        catalog = json.loads((project_directory / "example-config-catalog.json").read_text(encoding="utf-8"))
+        for name, job in catalog.items():
+            if not name.endswith("_job"):
+                continue
+            with self.subTest(job=name):
+                job["_config_directory"] = str(project_directory)
+                mosaic_data_merger.validate_config(job)
+
     def make_job(self, directory: Path) -> Path:
         (directory / "no-header.csv").write_text(
             "amsterdam,Alice,unused,19-07-2026\nrotterdam,,unused,20-07-2026\n",

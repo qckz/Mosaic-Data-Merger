@@ -1,0 +1,256 @@
+{
+  "catalog_note": "This is a configuration reference, not a directly runnable job. Copy exactly one *_job object into your own job.json, then replace the illustrative paths and mappings.",
+  "csv_replace_job": {
+    "output": {
+      "path": "./output/merged.csv",
+      "format": "csv",
+      "delimiter": ";",
+      "quotechar": "\"",
+      "escapechar": "\\",
+      "doublequote": true,
+      "encoding": "utf-8",
+      "quote_all": true,
+      "mode": "replace",
+      "atomic_write": true,
+      "add_provenance": true,
+      "columns": ["Place", "Name", "Date", "Source", "Status", "Code", "Notes", "STIX ID"]
+    },
+    "inputs": [
+      {
+        "path": "./sample-data/list_*.csv",
+        "format": "csv",
+        "encoding": "utf-8",
+        "header": false,
+        "delimiter": ",",
+        "quotechar": "\"",
+        "escapechar": "\\",
+        "doublequote": true,
+        "skipinitialspace": true,
+        "strict": false,
+        "on_malformed_row": "pad",
+        "mapping": {
+          "1": "Place",
+          "2": "Name",
+          "4": "Date",
+          "$constants": {
+            "Source": "list-import",
+            "Status": "new"
+          }
+        }
+      },
+      {
+        "path": "./sample-data/customers.csv",
+        "format": "csv",
+        "header": true,
+        "delimiter": ";",
+        "mapping": {
+          "City": "Place",
+          "Customer name": "Name",
+          "Created at": "Date",
+          "Status": "Status"
+        },
+        "on_malformed_row": "error"
+      },
+      {
+        "path": "./sample-data/variable-layout.csv",
+        "format": "csv",
+        "header": "auto",
+        "mapping": {
+          "City": "Place",
+          "Name": "Name"
+        },
+        "on_malformed_row": "skip"
+      },
+      {
+        "path": "./sample-data/events.jsonl",
+        "format": "jsonl",
+        "encoding": "utf-8",
+        "mapping": {
+          "city": "Place",
+          "full_name": "Name",
+          "event_date": "Date",
+          "note": "Notes"
+        },
+        "on_malformed_row": "skip"
+      },
+      {
+        "path": "./sample-data/people.json",
+        "format": "json",
+        "mapping": {
+          "place": "Place",
+          "name": "Name",
+          "status": "Status"
+        },
+        "on_malformed_row": "error"
+      },
+      {
+        "path": "./sample-data/threat-intelligence.json",
+        "format": "stix",
+        "mapping": {
+          "name": "Name",
+          "id": "STIX ID",
+          "description": "Notes"
+        },
+        "on_malformed_row": "skip"
+      }
+    ],
+    "transformations": {
+      "Place": [
+        { "type": "trim" },
+        { "type": "title_case" },
+        { "type": "set_default", "value": "Unknown" }
+      ],
+      "Name": [
+        { "type": "trim" },
+        { "type": "replace", "old": "\t", "new": " " }
+      ],
+      "Status": [
+        { "type": "lowercase" },
+        { "type": "uppercase" },
+        { "type": "null_if", "values": ["N/A", "-", "NULL"] }
+      ],
+      "Date": [
+        {
+          "type": "date_format",
+          "input_formats": ["%d-%m-%Y", "%Y/%m/%d"],
+          "output_format": "%Y-%m-%d"
+        }
+      ]
+    },
+    "filters": [
+      { "column": "Name", "operator": "not_empty" },
+      { "column": "Status", "operator": "not_equals", "value": "deleted" },
+      { "column": "Code", "operator": "equals", "value": "" },
+      { "column": "Place", "operator": "contains", "value": "" },
+      { "column": "Code", "operator": "in", "values": ["", "A", "B"] },
+      { "column": "STIX ID", "operator": "empty" },
+      { "column": "Notes", "operator": "regex", "value": ".*" }
+    ],
+    "validation": {
+      "on_error": "reject",
+      "rejects_path": "./output/rejected.csv",
+      "rules": [
+        { "column": "Place", "type": "required" },
+        { "column": "Date", "type": "date", "format": "%Y-%m-%d" },
+        { "column": "Code", "type": "number" },
+        { "column": "Name", "type": "regex", "pattern": ".+" }
+      ]
+    },
+    "exclusions": [
+      {
+        "path": "./sample-data/exclusions_*.csv",
+        "format": "csv",
+        "encoding": "utf-8",
+        "header": false,
+        "delimiter": ",",
+        "mapping": {
+          "1": "Name",
+          "2": "Place"
+        },
+        "keys": ["Name", "Place"],
+        "on_malformed_row": "skip",
+        "allow_empty_keys": false
+      }
+    ],
+    "deduplication": {
+      "enabled": true,
+      "keys": ["Place", "Name"],
+      "keep": "first"
+    }
+  },
+  "csv_append_job": {
+    "output": {
+      "path": "./output/incremental.csv",
+      "format": "csv",
+      "delimiter": ",",
+      "encoding": "utf-8",
+      "quote_all": false,
+      "mode": "append",
+      "atomic_write": false,
+      "columns": ["Place", "Name"]
+    },
+    "inputs": [
+      {
+        "path": "./sample-data/records.csv",
+        "header": true,
+        "mapping": {
+          "City": "Place",
+          "Name": "Name"
+        }
+      }
+    ]
+  },
+  "json_output_job": {
+    "output": {
+      "path": "./output/records.json",
+      "format": "json",
+      "encoding": "utf-8",
+      "mode": "replace",
+      "atomic_write": true,
+      "columns": ["Place", "Name"]
+    },
+    "inputs": [
+      {
+        "path": "./sample-data/records.csv",
+        "header": true,
+        "mapping": {
+          "City": "Place",
+          "Name": "Name"
+        }
+      }
+    ]
+  },
+  "jsonl_output_job": {
+    "output": {
+      "path": "./output/records.jsonl",
+      "format": "jsonl",
+      "encoding": "utf-8",
+      "mode": "append",
+      "atomic_write": false,
+      "columns": ["Place", "Name"]
+    },
+    "inputs": [
+      {
+        "path": "./sample-data/records.jsonl",
+        "format": "jsonl",
+        "mapping": {
+          "city": "Place",
+          "name": "Name"
+        }
+      }
+    ]
+  },
+  "stix_output_job": {
+    "output": {
+      "path": "./output/notes.json",
+      "format": "stix",
+      "encoding": "utf-8",
+      "mode": "replace",
+      "atomic_write": true,
+      "columns": ["Title", "Content"],
+      "stix": {
+        "object_type": "note",
+        "properties": {
+          "Title": "abstract",
+          "Content": "content"
+        },
+        "static": {
+          "object_refs": ["indicator--00000000-0000-4000-8000-000000000001"]
+        },
+        "bundle_id": "bundle--00000000-0000-4000-8000-000000000002",
+        "timestamp": "2026-07-24T12:00:00.000Z",
+        "add_timestamps": true
+      }
+    },
+    "inputs": [
+      {
+        "path": "./sample-data/threat-intelligence.json",
+        "format": "stix",
+        "mapping": {
+          "name": "Title",
+          "pattern": "Content"
+        }
+      }
+    ]
+  }
+}
