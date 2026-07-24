@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stream and normalize differently shaped CSV files into one CSV output.
+"""Mosaic Data Merger: stream and normalize heterogeneous data files.
 
 The program intentionally uses only Python's standard library, so it is easy
 to use in scheduled jobs and restricted automation environments.
@@ -555,7 +555,7 @@ class DiskDeduplicator:
 
     def __init__(self, keys: list[str]) -> None:
         self.keys = keys
-        fd, name = tempfile.mkstemp(prefix="csv-merge-dedupe-", suffix=".sqlite3")
+        fd, name = tempfile.mkstemp(prefix="mosaic-data-merger-dedupe-", suffix=".sqlite3")
         os.close(fd)
         self.path = name
         self.connection = sqlite3.connect(name)
@@ -582,7 +582,7 @@ class DiskExcluder:
 
     def __init__(self, rules: list[dict[str, Any]]) -> None:
         self.rules = rules
-        fd, name = tempfile.mkstemp(prefix="csv-merge-exclusions-", suffix=".sqlite3")
+        fd, name = tempfile.mkstemp(prefix="mosaic-data-merger-exclusions-", suffix=".sqlite3")
         os.close(fd)
         self.path = name
         self.connection = sqlite3.connect(name)

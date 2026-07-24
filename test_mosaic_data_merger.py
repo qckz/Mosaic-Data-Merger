@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import csv_merge
+import mosaic_data_merger
 
 
 class CsvMergeTests(unittest.TestCase):
@@ -59,7 +59,7 @@ class CsvMergeTests(unittest.TestCase):
     def test_mixed_layouts_validation_rejects_and_deduplication(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             directory = Path(name)
-            report = csv_merge.process(csv_merge.load_config(self.make_job(directory)))
+            report = mosaic_data_merger.process(mosaic_data_merger.load_config(self.make_job(directory)))
             self.assertEqual(report["rows_read"], 4)
             self.assertEqual(report["rows_written"], 1)
             self.assertEqual(report["rows_filtered"], 1)
@@ -83,8 +83,8 @@ class CsvMergeTests(unittest.TestCase):
             }
             config_path = directory / "job.json"
             config_path.write_text(json.dumps(config), encoding="utf-8")
-            with self.assertRaises(csv_merge.ConfigError):
-                csv_merge.process(csv_merge.load_config(config_path))
+            with self.assertRaises(mosaic_data_merger.ConfigError):
+                mosaic_data_merger.process(mosaic_data_merger.load_config(config_path))
 
     def test_one_jsonl_file_transforms_all_mapped_keys_to_csv(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -105,7 +105,7 @@ class CsvMergeTests(unittest.TestCase):
             }
             config_path = directory / "job.json"
             config_path.write_text(json.dumps(config), encoding="utf-8")
-            report = csv_merge.process(csv_merge.load_config(config_path))
+            report = mosaic_data_merger.process(mosaic_data_merger.load_config(config_path))
             self.assertEqual(report["rows_read"], 2)
             self.assertEqual(report["rows_written"], 2)
             self.assertEqual(report["files"][0]["format"], "jsonl")
@@ -130,7 +130,7 @@ class CsvMergeTests(unittest.TestCase):
             }
             config_path = directory / "job.json"
             config_path.write_text(json.dumps(config), encoding="utf-8")
-            report = csv_merge.process(csv_merge.load_config(config_path))
+            report = mosaic_data_merger.process(mosaic_data_merger.load_config(config_path))
             self.assertEqual(report["rows_written"], 2)
             self.assertEqual(
                 json.loads((directory / "out/people.json").read_text(encoding="utf-8")),
@@ -176,7 +176,7 @@ class CsvMergeTests(unittest.TestCase):
             }
             config_path = directory / "job.json"
             config_path.write_text(json.dumps(config), encoding="utf-8")
-            report = csv_merge.process(csv_merge.load_config(config_path))
+            report = mosaic_data_merger.process(mosaic_data_merger.load_config(config_path))
             self.assertEqual(report["rows_written"], 1)
             bundle = json.loads((directory / "out/notes.json").read_text(encoding="utf-8"))
             self.assertEqual(bundle["type"], "bundle")
@@ -205,7 +205,7 @@ class CsvMergeTests(unittest.TestCase):
             config_path = directory / "job.json"
             config_path.write_text(json.dumps(config), encoding="utf-8")
             information: list[str] = []
-            report = csv_merge.process(csv_merge.load_config(config_path), info=information.append)
+            report = mosaic_data_merger.process(mosaic_data_merger.load_config(config_path), info=information.append)
             self.assertEqual(report["rows_read"], 2)
             self.assertEqual(report["input_patterns"], [{"path": "list_*.csv", "format": "csv", "matched_files": 2}])
             self.assertTrue(any("matched 2 file(s)" in message for message in information))
@@ -227,8 +227,8 @@ class CsvMergeTests(unittest.TestCase):
             }
             config_path = directory / "job.json"
             config_path.write_text(json.dumps(config), encoding="utf-8")
-            with self.assertRaisesRegex(csv_merge.ConfigError, "matched no files"):
-                csv_merge.process(csv_merge.load_config(config_path))
+            with self.assertRaisesRegex(mosaic_data_merger.ConfigError, "matched no files"):
+                mosaic_data_merger.process(mosaic_data_merger.load_config(config_path))
 
     def test_wrong_csv_delimiter_explains_the_parsed_header(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -245,8 +245,8 @@ class CsvMergeTests(unittest.TestCase):
             }
             config_path = directory / "job.json"
             config_path.write_text(json.dumps(config), encoding="utf-8")
-            with self.assertRaisesRegex(csv_merge.ConfigError, "delimiter ';'.*Available headers: 'City,Name'.*contains ','"):
-                csv_merge.process(csv_merge.load_config(config_path))
+            with self.assertRaisesRegex(mosaic_data_merger.ConfigError, "delimiter ';'.*Available headers: 'City,Name'.*contains ','"):
+                mosaic_data_merger.process(mosaic_data_merger.load_config(config_path))
 
     def test_input_mapping_constants_fill_output_columns(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -265,7 +265,7 @@ class CsvMergeTests(unittest.TestCase):
             }
             config_path = directory / "job.json"
             config_path.write_text(json.dumps(config), encoding="utf-8")
-            csv_merge.process(csv_merge.load_config(config_path))
+            mosaic_data_merger.process(mosaic_data_merger.load_config(config_path))
             with (directory / "out.csv").open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(rows, [{"Place": "Amsterdam", "Source": "manual-import", "Priority": "10"}])
@@ -290,7 +290,7 @@ class CsvMergeTests(unittest.TestCase):
             }
             config_path = directory / "job.json"
             config_path.write_text(json.dumps(config), encoding="utf-8")
-            csv_merge.process(csv_merge.load_config(config_path))
+            mosaic_data_merger.process(mosaic_data_merger.load_config(config_path))
             self.assertEqual(
                 (directory / "out.csv").read_text(encoding="utf-8"),
                 '"Name","Place"\n"Alice ""The Ace""","Amsterdam"\n',
@@ -320,7 +320,7 @@ class CsvMergeTests(unittest.TestCase):
             }
             config_path = directory / "job.json"
             config_path.write_text(json.dumps(config), encoding="utf-8")
-            report = csv_merge.process(csv_merge.load_config(config_path))
+            report = mosaic_data_merger.process(mosaic_data_merger.load_config(config_path))
             self.assertEqual(report["rows_excluded"], 1)
             self.assertEqual(report["exclusions"][0]["keys_loaded"], 1)
             self.assertEqual(report["exclusions"][0]["rows_excluded"], 1)
@@ -349,8 +349,8 @@ class CsvMergeTests(unittest.TestCase):
             }
             config_path = directory / "job.json"
             config_path.write_text(json.dumps(config), encoding="utf-8")
-            with self.assertRaisesRegex(csv_merge.ConfigError, "keys must each be mapped"):
-                csv_merge.process(csv_merge.load_config(config_path))
+            with self.assertRaisesRegex(mosaic_data_merger.ConfigError, "keys must each be mapped"):
+                mosaic_data_merger.process(mosaic_data_merger.load_config(config_path))
 
 
 if __name__ == "__main__":
