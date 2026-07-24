@@ -646,3 +646,5 @@ Use [examples/example-stix-job.json](examples/example-stix-job.json) as a comple
 | Need a fixed value for every row | Use `$constants`, not `default_if_missing`. |
 
 For every available option in one copyable catalog, see [examples/config-catalog.json](examples/config-catalog.json). For architecture and extension points, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+For the exact JSON returned by inspect, validate, and run, including every report field and counter, see [CLI_OUTPUT.md](CLI_OUTPUT.md).

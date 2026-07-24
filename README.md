@@ -46,6 +46,7 @@ Commands print machine-readable JSON. Add `--verbose` for progress information o
 ## Documentation and examples
 
 - [Configuration reference](CONFIGURATION.md) — complete option reference, format rules, defaults, error behavior, and copyable recipes.
+- [CLI output and reports](CLI_OUTPUT.md) — exact JSON output fields, counters, exit codes, diagnostics, and automation examples.
 - [Architecture](ARCHITECTURE.md) — package structure and extension points.
 - [Examples](examples) — sample jobs, data, and a comprehensive [configuration catalog](examples/config-catalog.json).
 
