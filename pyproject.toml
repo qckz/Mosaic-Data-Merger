@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mosaic-data-merger"
+version = "0.1.0"
+description = "An offline, schema-driven data transformation, merge, and exclusion tool."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Mosaic Data Merger contributors"}]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+
+[project.scripts]
+mosaic-data-merger = "mosaic_data_merger.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

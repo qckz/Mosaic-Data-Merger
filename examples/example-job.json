@@ -1,27 +1,31 @@
 {
   "output": {
-    "path": "./output/customers.csv",
+    "path": "../output/customers.csv",
     "delimiter": ";",
     "encoding": "utf-8",
-    "columns": ["Place", "Name", "Date"],
+    "columns": ["Place", "Name", "Date", "Source"],
+    "quote_all": false,
     "mode": "replace",
     "add_provenance": true,
     "atomic_write": true
   },
   "inputs": [
     {
-      "path": "./input/locations-without-headers.csv",
+      "path": "../input/list_*.csv",
       "header": false,
       "delimiter": ",",
       "mapping": {
         "1": "Place",
         "2": "Name",
-        "4": "Date"
+        "4": "Date",
+        "$constants": {
+          "Source": "locations-import"
+        }
       },
       "on_malformed_row": "pad"
     },
     {
-      "path": "./input/customers-with-headers.csv",
+      "path": "../input/customers.csv",
       "header": true,
       "delimiter": ";",
       "mapping": {
@@ -29,6 +33,17 @@
         "Customer name": "Name",
         "Created at": "Date"
       }
+    },
+    {
+      "path": "../input/events.jsonl",
+      "format": "jsonl",
+      "encoding": "utf-8",
+      "mapping": {
+        "city": "Place",
+        "full_name": "Name",
+        "event_date": "Date"
+      },
+      "on_malformed_row": "skip"
     }
   ],
   "transformations": {
@@ -49,7 +64,7 @@
   ],
   "validation": {
     "on_error": "reject",
-    "rejects_path": "./output/customer-rejects.csv",
+    "rejects_path": "../output/customer-rejects.csv",
     "rules": [
       { "column": "Place", "type": "required" },
       { "column": "Date", "type": "date", "format": "%Y-%m-%d" }

@@ -1,90 +1,52 @@
-# CSV Manipulator
+# Mosaic Data Merger
 
-`csv_merge.py` merges CSV files with different delimiters, layouts, and header conventions into one standardized CSV. It streams records rather than loading all input rows into memory, making it suitable for very large files. It needs only Python 3.10+ and the standard library.
+An offline, schema-driven data transformation, merge, and exclusion tool.
+
+Mosaic Data Merger transforms one or many CSV, JSON, JSONL, and STIX 2.1 files into CSV, JSON, JSONL, or STIX output. It is designed for automation and large files: CSV and JSONL are streamed row by row, while deduplication and exclusions use temporary SQLite indexes instead of loading source rows into memory.
+
+## Install
+
+Python 3.10+ is required. The project has no third-party runtime dependencies.
+
+```bash
+python3 -m pip install .
+mosaic-data-merger validate --config /path/to/config/job.json
+```
+
+For development, use `python3 -m pip install -e .`. You can also run from a checkout without installing it: `PYTHONPATH=src python3 -m mosaic_data_merger …`.
 
 ## Run a job
 
 ```bash
-python3 csv_merge.py validate --config example-job.json
-python3 csv_merge.py run --config example-job.json --report ./output/report.json
+mosaic-data-merger validate --config config/job.json
+mosaic-data-merger run --config config/job.json --verbose
+mosaic-data-merger run --config config/job.json --dry-run
 ```
 
-Use a dry run to execute mappings, transformations, filtering, validation, and deduplication without creating the output or rejects files:
+Configuration paths are relative to the configuration file. A conventional layout is:
+
+```text
+project/
+├── config/job.json
+├── input/
+└── output/
+```
+
+In that layout, use `../input/*.json` for inputs and `../output/result.csv` for output in `config/job.json`. Wildcards work for every supported input type; use them with `validate` or `run`, not `inspect` (which accepts one file).
+
+The `inspect` command helps identify a single unfamiliar file’s delimiter, likely header, and sample fields:
 
 ```bash
-python3 csv_merge.py run --config example-job.json --dry-run
+mosaic-data-merger inspect input/source.csv --delimiter ','
+mosaic-data-merger inspect input/threat-intelligence.json --format stix
 ```
 
-Inspect an unfamiliar source before writing its configuration:
+Commands print machine-readable JSON. Add `--verbose` for progress information on standard error, and `--report /path/to/report.json` to persist a run summary.
 
-```bash
-python3 csv_merge.py inspect ./input/source.csv
-python3 csv_merge.py inspect ./input/source.csv --encoding windows-1252 --delimiter ';'
-```
+## Documentation and examples
 
-The commands print JSON, which makes their output easy to store in automation logs.
+- [Configuration guide](CONFIGURATION.md) — full schema reference, mappings, wildcards, CSV settings, JSON/JSONL/STIX, transformations, exclusions, validation, and performance details.
+- [Architecture](ARCHITECTURE.md) — package structure and extension points.
+- [Examples](examples) — sample jobs, data, and a comprehensive [configuration catalog](examples/config-catalog.json).
 
-## Job configuration
-
-Start by copying [example-job.json](example-job.json), then update its input and output paths for your job. Relative paths are resolved from the configuration file's directory (not the current terminal directory). The top-level fields are:
-
-- `output`: destination, output schema, delimiter/encoding, output mode, and provenance columns.
-- `inputs`: one specification per source file, including its layout and field mapping.
-- `transformations`: cleanup steps applied to normalized output fields.
-- `filters`: conditions a row must satisfy to be included.
-- `validation`: data-quality rules and how invalid records are handled.
-- `deduplication`: optional bounded-memory duplicate detection.
-
-### Mapping fields
-
-`output.columns` fixes the exact column names and order. Every input `mapping` maps a source field to one of those names.
-
-For a headerless source, use one-based positions:
-
-```json
-{
-  "header": false,
-  "mapping": { "1": "Place", "3": "Name" }
-}
-```
-
-For a source with headers, source names are supported alongside positions:
-
-```json
-{
-  "header": true,
-  "mapping": { "City": "Place", "Customer name": "Name", "5": "Date" }
-}
-```
-
-A field may be mapped to the same output field in different input files. Missing fields in a particular source are emitted empty, and transformations such as `set_default` can fill them. Within a single source, mapping two source fields to one output field is rejected to prevent accidental overwrites.
-
-Set `header` to `"auto"` only for exploratory or variable sources; explicit `true` or `false` is preferable in production. When `delimiter` is omitted, the tool tries to detect one, but explicit delimiters avoid ambiguity and are faster.
-
-### Transformations
-
-Transformations run in the configured order for each output field. Available types:
-
-- `trim`, `lowercase`, `uppercase`, `title_case`
-- `set_default` (`value` is used only when the field is empty)
-- `replace` (`old`, optional `new`)
-- `null_if` (`values` array)
-- `date_format` (`input_formats` array and `output_format`)
-
-### Filters and validation
-
-All filters must match for a row to be written. Operators are `not_empty`, `empty`, `equals`, `not_equals`, `contains`, `in` (with `values`), and `regex`.
-
-Validation rules support `required`, `date` (with `format`), `number`, and `regex` (with `pattern`). Set `validation.on_error` to:
-
-- `error` — stop immediately (the default).
-- `reject` — write the normalized row and `_error` message to `rejects_path`.
-- `skip` — omit the row and record it in the report.
-
-Input `on_malformed_row` controls rows that are too short for the requested mapped positions: `error` (default), `skip`, or `pad` (use empty values for absent fields).
-
-### Large files and safety
-
-Normal merging, transformations, filters, and validation use constant memory. Deduplication uses a temporary SQLite key store so it also remains bounded-memory; it supports `keep: "first"` only. Output uses atomic replacement by default: downstream systems see either the old complete file or the new complete file, never a partially written result. Atomic replacement cannot be combined with append mode.
-
-When `add_provenance` is true, `source_file` and `source_row` are appended to the output schema automatically. This is especially useful for rejected-row investigations.
+The two standalone job samples use configuration-relative `../input/` and `../output/` paths. The catalog references the bundled `examples/data` inputs.
