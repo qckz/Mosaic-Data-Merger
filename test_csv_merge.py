@@ -296,6 +296,62 @@ class CsvMergeTests(unittest.TestCase):
                 '"Name","Place"\n"Alice ""The Ace""","Amsterdam"\n',
             )
 
+    def test_headerless_exclusion_list_uses_all_keys_for_and_matching(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / "people.csv").write_text(
+                "Email,Country,Name\nalice@example.test,NL,Alice NL\nalice@example.test,US,Alice US\nbob@example.test,NL,Bob NL\n",
+                encoding="utf-8",
+            )
+            (directory / "exclude.csv").write_text("alice@example.test,NL\n", encoding="utf-8")
+            config = {
+                "output": {"path": "out/people.json", "format": "json", "columns": ["Email", "Country", "Name"]},
+                "inputs": [{
+                    "path": "people.csv",
+                    "header": True,
+                    "mapping": {"Email": "Email", "Country": "Country", "Name": "Name"},
+                }],
+                "exclusions": [{
+                    "path": "exclude.csv",
+                    "header": False,
+                    "mapping": {"1": "Email", "2": "Country"},
+                    "keys": ["Email", "Country"],
+                }],
+            }
+            config_path = directory / "job.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            report = csv_merge.process(csv_merge.load_config(config_path))
+            self.assertEqual(report["rows_excluded"], 1)
+            self.assertEqual(report["exclusions"][0]["keys_loaded"], 1)
+            self.assertEqual(report["exclusions"][0]["rows_excluded"], 1)
+            self.assertEqual(
+                json.loads((directory / "out/people.json").read_text(encoding="utf-8")),
+                [
+                    {"Email": "alice@example.test", "Country": "US", "Name": "Alice US"},
+                    {"Email": "bob@example.test", "Country": "NL", "Name": "Bob NL"},
+                ],
+            )
+
+    def test_exclusion_key_must_be_mapped(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / "people.csv").write_text("Email\na@example.test\n", encoding="utf-8")
+            (directory / "exclude.csv").write_text("a@example.test\n", encoding="utf-8")
+            config = {
+                "output": {"path": "out.csv", "columns": ["Email", "Country"]},
+                "inputs": [{"path": "people.csv", "mapping": {"Email": "Email"}}],
+                "exclusions": [{
+                    "path": "exclude.csv",
+                    "header": False,
+                    "mapping": {"1": "Email"},
+                    "keys": ["Email", "Country"],
+                }],
+            }
+            config_path = directory / "job.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            with self.assertRaisesRegex(csv_merge.ConfigError, "keys must each be mapped"):
+                csv_merge.process(csv_merge.load_config(config_path))
+
 
 if __name__ == "__main__":
     unittest.main()

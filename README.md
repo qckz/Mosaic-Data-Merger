@@ -2,7 +2,7 @@
 
 `csv_merge.py` transforms CSV, JSON, JSONL, and STIX 2.1 files into CSV, JSON, or STIX output. CSV and JSONL are processed row-by-row; regular JSON and STIX Bundles are read as complete JSON documents. It needs only Python 3.10+ and the standard library.
 
-A job may have one input (a transformation) or many inputs (a merge). The output is always CSV.
+A job may have one input (a transformation) or many inputs (a merge). Its output format is selected per job: CSV, JSON, or STIX 2.1.
 
 ## Run a job
 
@@ -50,7 +50,7 @@ Start by copying [example-job.json](example-job.json), then update its input and
 
 ### Output options
 
-`output` defines the target CSV and is required.
+`output` defines the target file and format and is required.
 
 | Option | Required | Meaning |
 |---|---:|---|
@@ -284,6 +284,32 @@ Validation rules support `required`, `date` (with `format`), `number`, and `rege
 - `skip` — omit the row and record it in the report.
 
 For CSV, `on_malformed_row` controls rows that are too short for the requested mapped positions: `error` (default), `skip`, or `pad` (use empty values for absent fields). For JSONL, JSON, and STIX, it controls invalid records: `error` or `skip`. A syntactically invalid JSON/STIX document always stops the job because its records cannot be read safely.
+
+### Excluding rows with a CSV list
+
+Use top-level `exclusions` to remove normalized rows that appear in one or more CSV exclusion lists. Exclusions run after transformations and ordinary filters, but before validation, deduplication, and writing the CSV, JSON, or STIX output.
+
+```json
+"exclusions": [
+  {
+    "path": "./input/excluded-customers.csv",
+    "format": "csv",
+    "header": false,
+    "delimiter": ",",
+    "mapping": {
+      "1": "Email",
+      "2": "Country"
+    },
+    "keys": ["Email", "Country"]
+  }
+]
+```
+
+The exclusion list may have headers (`"Email address": "Email"`) or use one-based positions when `header` is `false`. `keys` defines the composite match: **all** listed output columns must match one exclusion-list row for the row to be removed. A one-key list excludes all rows with that one value; multiple keys use AND matching, not OR matching.
+
+Exclusion paths support the same wildcards as normal inputs. Multiple exclusion lists are allowed; a row is removed when it matches any complete key tuple in any list. By default, entries or source rows with an empty key part do not match; set `"allow_empty_keys": true` only when blank values should be eligible for exclusion.
+
+The list is stored in a temporary SQLite index, so large exclusion lists do not require keeping all keys in memory. Run reports include `rows_excluded` plus per-list matched-file, key-loaded, duplicate-key, skipped-row, and match counts.
 
 ### Deduplication and reporting
 

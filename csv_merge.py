@@ -305,6 +305,46 @@ def validate_config(config: dict[str, Any], check_inputs: bool = True) -> list[s
         if condition.get("column") not in columns:
             raise ConfigError("Each filter must reference an output column.")
 
+    exclusions = config.get("exclusions", [])
+    if not isinstance(exclusions, list) or not all(isinstance(exclusion, dict) for exclusion in exclusions):
+        raise ConfigError("exclusions must be a list of exclusion-list objects.")
+    for index, exclusion in enumerate(exclusions, start=1):
+        path = exclusion.get("path")
+        if not isinstance(path, str) or not path:
+            raise ConfigError(f"exclusions[{index}].path must be a non-empty path.")
+        if check_inputs:
+            expand_input_paths(config, path)
+        if exclusion.get("format", "csv") != "csv":
+            raise ConfigError("Exclusion lists currently support only CSV format.")
+        header = exclusion.get("header", True)
+        if header not in {True, False, "auto"}:
+            raise ConfigError(f"exclusions[{index}].header must be true, false, or 'auto'.")
+        if "delimiter" in exclusion:
+            csv_options(exclusion)
+        mapping = exclusion.get("mapping")
+        if not isinstance(mapping, dict) or not mapping or "$constants" in mapping:
+            raise ConfigError(f"exclusions[{index}].mapping must be a non-empty source-field mapping.")
+        if not all(
+            isinstance(source_column, str) and source_column
+            and isinstance(target, str) and target in columns
+            for source_column, target in mapping.items()
+        ):
+            raise ConfigError(f"exclusions[{index}].mapping must map source fields to output.columns.")
+        for source_column in mapping:
+            if source_column.isdigit() and int(source_column) < 1:
+                raise ConfigError("Numeric exclusion column mappings are 1-based (minimum 1).")
+        keys = exclusion.get("keys")
+        if not isinstance(keys, list) or not keys or not all(isinstance(key, str) and key in columns for key in keys):
+            raise ConfigError(f"exclusions[{index}].keys must be non-empty output column names.")
+        if len(set(keys)) != len(keys):
+            raise ConfigError(f"exclusions[{index}].keys contains duplicate column names.")
+        if any(key not in mapping.values() for key in keys):
+            raise ConfigError(f"exclusions[{index}].keys must each be mapped by exclusions[{index}].mapping.")
+        if exclusion.get("on_malformed_row", "error") not in {"error", "skip", "pad"}:
+            raise ConfigError("exclusion on_malformed_row must be 'error', 'skip', or 'pad'.")
+        if not isinstance(exclusion.get("allow_empty_keys", False), bool):
+            raise ConfigError("exclusion allow_empty_keys must be true or false.")
+
     dedupe = config.get("deduplication", {})
     if dedupe and not isinstance(dedupe, dict):
         raise ConfigError("deduplication must be an object.")
@@ -366,6 +406,7 @@ def handle_normalized_row(
     config: dict[str, Any],
     validation: dict[str, Any],
     validation_rules: list[dict[str, Any]],
+    excluder: "DiskExcluder | None",
     dedupe: "DiskDeduplicator | None",
     writer: csv.DictWriter | None,
     reject_writer: csv.DictWriter | None,
@@ -378,6 +419,13 @@ def handle_normalized_row(
             stats["rows_filtered"] += 1
             source_stats["rows_filtered"] += 1
             return
+        if excluder:
+            matching_list = excluder.matching_list(row)
+            if matching_list is not None:
+                stats["rows_excluded"] += 1
+                source_stats["rows_excluded"] += 1
+                stats["exclusions"][matching_list]["rows_excluded"] += 1
+                return
         validate_row(row, validation_rules)
     except RowError as error:
         policy = validation.get("on_error", "error")
@@ -529,6 +577,119 @@ class DiskDeduplicator:
         Path(self.path).unlink(missing_ok=True)
 
 
+class DiskExcluder:
+    """Disk-backed composite-key exclusion sets, one set per configured list."""
+
+    def __init__(self, rules: list[dict[str, Any]]) -> None:
+        self.rules = rules
+        fd, name = tempfile.mkstemp(prefix="csv-merge-exclusions-", suffix=".sqlite3")
+        os.close(fd)
+        self.path = name
+        self.connection = sqlite3.connect(name)
+        self.connection.execute("PRAGMA journal_mode=OFF")
+        self.connection.execute("PRAGMA synchronous=OFF")
+        self.connection.execute(
+            "CREATE TABLE excluded (list_id INTEGER NOT NULL, key TEXT NOT NULL, PRIMARY KEY (list_id, key))"
+        )
+
+    @staticmethod
+    def key(values: list[str]) -> str:
+        return json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+
+    def add(self, list_id: int, values: list[str]) -> bool:
+        cursor = self.connection.execute(
+            "INSERT OR IGNORE INTO excluded(list_id, key) VALUES (?, ?)",
+            (list_id, self.key(values)),
+        )
+        return cursor.rowcount == 1
+
+    def matching_list(self, row: dict[str, str]) -> int | None:
+        for list_id, rule in enumerate(self.rules):
+            values = [row[column] for column in rule["keys"]]
+            if not rule.get("allow_empty_keys", False) and any(value == "" for value in values):
+                continue
+            found = self.connection.execute(
+                "SELECT 1 FROM excluded WHERE list_id = ? AND key = ?",
+                (list_id, self.key(values)),
+            ).fetchone()
+            if found:
+                return list_id
+        return None
+
+    def close(self) -> None:
+        self.connection.commit()
+        self.connection.close()
+        Path(self.path).unlink(missing_ok=True)
+
+
+def load_exclusions(
+    config: dict[str, Any], fields: list[str], info: Callable[[str], None] | None
+) -> tuple[DiskExcluder | None, list[dict[str, Any]]]:
+    rules = config.get("exclusions", [])
+    if not rules:
+        return None, []
+    excluder = DiskExcluder(rules)
+    summaries: list[dict[str, Any]] = []
+    try:
+        for list_id, rule in enumerate(rules):
+            paths = expand_input_paths(config, rule["path"])
+            summary: dict[str, Any] = {
+                "path": rule["path"], "keys": rule["keys"], "matched_files": len(paths),
+                "rows_read": 0, "keys_loaded": 0, "duplicate_keys": 0,
+                "rows_skipped": 0, "empty_keys_skipped": 0, "rows_excluded": 0,
+            }
+            if info:
+                info(f"Exclusion list {rule['path']!r} matched {len(paths)} file(s).")
+            for path in paths:
+                encoding = rule.get("encoding", "utf-8")
+                delimiter = rule.get("delimiter")
+                if delimiter is None:
+                    delimiter, _ = detect_dialect(path, encoding)
+                options = csv_options(rule, delimiter)
+                has_header = resolve_header(rule, path, encoding, options)
+                if info:
+                    info(
+                        f"Loading exclusions from {path}: CSV delimiter={options['delimiter']!r}, "
+                        f"header={'yes' if has_header else 'no'}."
+                    )
+                with path.open("r", encoding=encoding, newline="") as handle:
+                    reader = csv.reader(handle, **options)
+                    header = next(reader, None) if has_header else None
+                    if has_header and header is None:
+                        raise ConfigError(f"Exclusion list {path} declares a header but is empty.")
+                    index_mapping = make_index_mapping(rule, rule["mapping"], header, fields, options["delimiter"])
+                    max_index = max((index for index, _ in index_mapping), default=-1)
+                    for row_number, values in enumerate(reader, start=2 if has_header else 1):
+                        summary["rows_read"] += 1
+                        if len(values) <= max_index:
+                            policy = rule.get("on_malformed_row", "error")
+                            message = (
+                                f"exclusion row parsed as {len(values)} column(s) with delimiter "
+                                f"{options['delimiter']!r}; mapping requires column {max_index + 1}."
+                            )
+                            if policy == "error":
+                                raise RowError(f"{path}:{row_number}: {message}")
+                            if policy == "skip":
+                                summary["rows_skipped"] += 1
+                                continue
+                        exclusion_row = {field: "" for field in fields}
+                        for source_index, target in index_mapping:
+                            exclusion_row[target] = values[source_index] if source_index < len(values) else ""
+                        key_values = [exclusion_row[column] for column in rule["keys"]]
+                        if not rule.get("allow_empty_keys", False) and any(value == "" for value in key_values):
+                            summary["empty_keys_skipped"] += 1
+                            continue
+                        if excluder.add(list_id, key_values):
+                            summary["keys_loaded"] += 1
+                        else:
+                            summary["duplicate_keys"] += 1
+            summaries.append(summary)
+        return excluder, summaries
+    except Exception:
+        excluder.close()
+        raise
+
+
 class JsonArrayWriter:
     """Write a JSON array incrementally, avoiding an in-memory output list."""
 
@@ -614,13 +775,14 @@ def process(
 
     stats: dict[str, Any] = {
         "output": str(destination), "rows_read": 0, "rows_written": 0, "rows_filtered": 0,
-        "rows_rejected": 0, "rows_skipped": 0, "rows_deduplicated": 0, "files": [],
-        "input_patterns": [], "dry_run": dry_run,
+        "rows_rejected": 0, "rows_skipped": 0, "rows_excluded": 0, "rows_deduplicated": 0,
+        "files": [], "input_patterns": [], "exclusions": [], "dry_run": dry_run,
     }
     validation = config.get("validation", {})
     validation_rules = validation.get("rules", [])
     reject_handle = None
     reject_writer = None
+    excluder: DiskExcluder | None = None
     dedupe: DiskDeduplicator | None = None
     output_handle = None
     try:
@@ -630,6 +792,7 @@ def process(
             reject_handle = rejects_path.open("w", encoding=output_encoding, newline="")
             reject_writer = csv.DictWriter(reject_handle, fieldnames=[*fields, "_error"], **output_options)
             reject_writer.writeheader()
+        excluder, stats["exclusions"] = load_exclusions(config, fields, info)
         if config.get("deduplication", {}).get("enabled", False):
             dedupe = DiskDeduplicator(config["deduplication"]["keys"])
 
@@ -714,7 +877,7 @@ def process(
                             row["source_row"] = str(source_row_number)
                         handle_normalized_row(
                             row, path, source_row_number, config, validation, validation_rules,
-                            dedupe, writer, reject_writer, stats, source_stats,
+                            excluder, dedupe, writer, reject_writer, stats, source_stats,
                         )
                 stats["files"].append({
                     "path": str(path), **dict(source_stats), "format": "csv",
@@ -747,7 +910,7 @@ def process(
                             row["source_row"] = str(source_row_number)
                         handle_normalized_row(
                             row, path, source_row_number, config, validation, validation_rules,
-                            dedupe, writer, reject_writer, stats, source_stats,
+                            excluder, dedupe, writer, reject_writer, stats, source_stats,
                         )
                 stats["files"].append({"path": str(path), **dict(source_stats), "format": "jsonl"})
             else:
@@ -802,7 +965,7 @@ def process(
                         row["source_row"] = str(source_row_number)
                     handle_normalized_row(
                         row, path, source_row_number, config, validation, validation_rules,
-                        dedupe, writer, reject_writer, stats, source_stats,
+                        excluder, dedupe, writer, reject_writer, stats, source_stats,
                     )
                 stats["files"].append({"path": str(path), **dict(source_stats), "format": source_kind})
         if output_handle:
@@ -819,6 +982,8 @@ def process(
             output_handle.close()
         if dedupe:
             dedupe.close()
+        if excluder:
+            excluder.close()
         if reject_handle:
             reject_handle.close()
         if temporary:
@@ -932,6 +1097,14 @@ def main() -> int:
                         "matched_files": len(expand_input_paths(config, source["path"])),
                     }
                     for source in config["inputs"]
+                ],
+                "exclusion_patterns": [
+                    {
+                        "path": exclusion["path"],
+                        "keys": exclusion["keys"],
+                        "matched_files": len(expand_input_paths(config, exclusion["path"])),
+                    }
+                    for exclusion in config.get("exclusions", [])
                 ],
             })
         else:
