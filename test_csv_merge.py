@@ -248,6 +248,54 @@ class CsvMergeTests(unittest.TestCase):
             with self.assertRaisesRegex(csv_merge.ConfigError, "delimiter ';'.*Available headers: 'City,Name'.*contains ','"):
                 csv_merge.process(csv_merge.load_config(config_path))
 
+    def test_input_mapping_constants_fill_output_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / "places.csv").write_text("City\nAmsterdam\n", encoding="utf-8")
+            config = {
+                "output": {"path": "out.csv", "columns": ["Place", "Source", "Priority"]},
+                "inputs": [{
+                    "path": "places.csv",
+                    "header": True,
+                    "mapping": {
+                        "City": "Place",
+                        "$constants": {"Source": "manual-import", "Priority": 10},
+                    },
+                }],
+            }
+            config_path = directory / "job.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            csv_merge.process(csv_merge.load_config(config_path))
+            with (directory / "out.csv").open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows, [{"Place": "Amsterdam", "Source": "manual-import", "Priority": "10"}])
+
+    def test_quote_all_quotes_every_csv_field_and_escapes_embedded_quotes(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / "people.jsonl").write_text(
+                '{"name":"Alice \\"The Ace\\"","city":"Amsterdam"}\n', encoding="utf-8"
+            )
+            config = {
+                "output": {
+                    "path": "out.csv",
+                    "columns": ["Name", "Place"],
+                    "quote_all": True,
+                },
+                "inputs": [{
+                    "path": "people.jsonl",
+                    "format": "jsonl",
+                    "mapping": {"name": "Name", "city": "Place"},
+                }],
+            }
+            config_path = directory / "job.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            csv_merge.process(csv_merge.load_config(config_path))
+            self.assertEqual(
+                (directory / "out.csv").read_text(encoding="utf-8"),
+                '"Name","Place"\n"Alice ""The Ace""","Amsterdam"\n',
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

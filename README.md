@@ -58,6 +58,7 @@ Start by copying [example-job.json](example-job.json), then update its input and
 | `format` | No | `csv` (default), `json` (a JSON array of output records), or `stix` (a STIX 2.1 Bundle). |
 | `columns` | Yes | Ordered output header names. Every mapping target must appear here. |
 | `delimiter` | No | One-character CSV delimiter; defaults to `,`. It also controls CSV rejects output. |
+| `quote_all` | No | CSV only. When `true`, enclose every header and field in double quotes; defaults to `false`. Embedded `"` characters become `""`. |
 | `encoding` | No | Output text encoding; defaults to `utf-8`. |
 | `mode` | No | `replace` (default) creates a new file; `append` adds rows to a compatible existing file. |
 | `atomic_write` | No | With `replace` (the default), write a temporary file and replace the destination only after success. |
@@ -125,6 +126,38 @@ For a source with headers, source names are supported alongside positions:
 The same output field may be supplied by different inputs. For example, column `1` from a headerless CSV and key `city` from a JSONL file can both map to `Place`.
 
 A field may be mapped to the same output field in different input files. Missing fields in a particular source are emitted empty, and transformations such as `set_default` can fill them. Within a single source, mapping two source fields to one output field is rejected to prevent accidental overwrites. Any or all source fields can be mapped; unmapped source fields are ignored.
+
+### Fixed input values
+
+Within an input's `mapping`, use the reserved `$constants` object to provide a hard-coded value for output columns that do not exist in that source file. Constants are applied before transformations, filters, and validation, so they behave like any other mapped value.
+
+```json
+"mapping": {
+  "City": "Place",
+  "Customer name": "Name",
+  "$constants": {
+    "Source": "monthly-customer-export",
+    "Priority": 10
+  }
+}
+```
+
+`Source` and `Priority` must be declared in `output.columns`. A source field and a constant cannot both fill the same output column within one input specification. Constant strings, numbers, booleans, `null`, arrays, and objects are converted using the same rules as JSON values.
+
+### Fully quoted CSV output
+
+Set `quote_all` in `output` when a receiving system expects every CSV field to be double-quoted:
+
+```json
+"output": {
+  "path": "./output/customers.csv",
+  "format": "csv",
+  "columns": ["Place", "Name"],
+  "quote_all": true
+}
+```
+
+This produces values such as `"Alice ""The Ace"""`; embedded double quotes are escaped according to the CSV standard. CSV headers are quoted too. `quote_all` is available only for CSV output.
 
 Set `header` to `"auto"` only for exploratory or variable sources; explicit `true` or `false` is preferable in production. When `delimiter` is omitted, the tool tries to detect one, but explicit delimiters avoid ambiguity and are faster.
 

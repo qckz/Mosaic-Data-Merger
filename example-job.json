@@ -3,7 +3,8 @@
     "path": "./output/customers.csv",
     "delimiter": ";",
     "encoding": "utf-8",
-    "columns": ["Place", "Name", "Date"],
+    "columns": ["Place", "Name", "Date", "Source"],
+    "quote_all": false,
     "mode": "replace",
     "add_provenance": true,
     "atomic_write": true
@@ -16,7 +17,10 @@
       "mapping": {
         "1": "Place",
         "2": "Name",
-        "4": "Date"
+        "4": "Date",
+        "$constants": {
+          "Source": "locations-import"
+        }
       },
       "on_malformed_row": "pad"
     },

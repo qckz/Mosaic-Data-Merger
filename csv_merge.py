@@ -101,6 +101,21 @@ def json_value_to_csv(value: Any) -> str:
     return str(value)
 
 
+def mapping_parts(source: dict[str, Any]) -> tuple[dict[str, str], dict[str, Any]]:
+    """Separate ordinary source-field mappings from fixed output values."""
+    mapping = source["mapping"]
+    constants = mapping.get("$constants", {})
+    source_mapping = {key: target for key, target in mapping.items() if key != "$constants"}
+    return source_mapping, constants
+
+
+def row_with_constants(fields: list[str], constants: dict[str, Any]) -> dict[str, str]:
+    row = {field: "" for field in fields}
+    for target, value in constants.items():
+        row[target] = json_value_to_csv(value)
+    return row
+
+
 def detect_dialect(path: Path, encoding: str) -> tuple[str, str]:
     """Return delimiter and a short sample, falling back predictably to comma."""
     try:
@@ -143,6 +158,22 @@ def csv_options(spec: dict[str, Any], default_delimiter: str | None = None) -> d
     return options
 
 
+def output_csv_options(output: dict[str, Any]) -> dict[str, Any]:
+    options = csv_options(output, ",")
+    quote_all = output.get("quote_all", False)
+    if not isinstance(quote_all, bool):
+        raise ConfigError("output.quote_all must be true or false.")
+    if quote_all:
+        if output.get("quotechar", '"') != '"':
+            raise ConfigError("output.quote_all requires the double-quote quotechar.")
+        if output.get("doublequote", True) is not True:
+            raise ConfigError("output.quote_all requires doublequote: true to escape embedded double quotes.")
+        options["quotechar"] = '"'
+        options["doublequote"] = True
+        options["quoting"] = csv.QUOTE_ALL
+    return options
+
+
 def output_columns(config: dict[str, Any]) -> list[str]:
     output = config.get("output")
     if not isinstance(output, dict):
@@ -169,7 +200,9 @@ def validate_config(config: dict[str, Any], check_inputs: bool = True) -> list[s
     output_format = output.get("format", "csv")
     if output_format not in {"csv", "json", "stix"}:
         raise ConfigError("output.format must be 'csv', 'json', or 'stix'.")
-    csv_options(output, ",")
+    if output_format != "csv" and output.get("quote_all", False):
+        raise ConfigError("output.quote_all is available only for CSV output.")
+    output_csv_options(output)
     if output.get("mode", "replace") not in {"replace", "append"}:
         raise ConfigError("output.mode must be 'replace' or 'append'.")
     if output_format != "csv" and output.get("mode", "replace") == "append":
@@ -219,14 +252,22 @@ def validate_config(config: dict[str, Any], check_inputs: bool = True) -> list[s
         mapping = source.get("mapping")
         if not isinstance(mapping, dict) or not mapping:
             raise ConfigError(f"inputs[{index}].mapping must be a non-empty object.")
-        targets = list(mapping.values())
+        constants = mapping.get("$constants", {})
+        if not isinstance(constants, dict):
+            raise ConfigError(f"inputs[{index}].mapping.$constants must be an object.")
+        source_mapping, constants = mapping_parts(source)
+        if not source_mapping and not constants:
+            raise ConfigError(f"inputs[{index}].mapping must map a source field or define $constants.")
+        targets = list(source_mapping.values())
         if not all(isinstance(target, str) and target in columns for target in targets):
             raise ConfigError(
                 f"inputs[{index}].mapping targets must be names in output.columns."
             )
-        if len(set(targets)) != len(targets):
-            raise ConfigError(f"inputs[{index}] maps more than one source field to an output field.")
-        for source_column in mapping:
+        if not all(isinstance(target, str) and target in columns for target in constants):
+            raise ConfigError(f"inputs[{index}].mapping.$constants keys must be names in output.columns.")
+        if len(set([*targets, *constants])) != len([*targets, *constants]):
+            raise ConfigError(f"inputs[{index}] maps more than one value to an output field.")
+        for source_column in source_mapping:
             if not isinstance(source_column, str) or not source_column:
                 raise ConfigError(f"inputs[{index}] has an invalid mapping key.")
             if source_kind == "csv" and source_column.isdigit() and int(source_column) < 1:
@@ -285,13 +326,14 @@ def resolve_header(source: dict[str, Any], path: Path, encoding: str, options: d
 
 
 def make_index_mapping(
-    source: dict[str, Any], header_row: list[str] | None, output_fields: list[str], delimiter: str
+    source: dict[str, Any], source_mapping: dict[str, str], header_row: list[str] | None,
+    output_fields: list[str], delimiter: str,
 ) -> list[tuple[int, str]]:
     result: list[tuple[int, str]] = []
     header_index = {name: index for index, name in enumerate(header_row or [])}
     if header_row and len(header_index) != len(header_row):
         raise ConfigError(f"Input {source['path']} has duplicate header names.")
-    for source_key, target in source["mapping"].items():
+    for source_key, target in source_mapping.items():
         if source_key.isdigit():
             result.append((int(source_key) - 1, target))
         elif header_row is None:
@@ -559,7 +601,7 @@ def process(
     output = config["output"]
     destination = config_path(config, output["path"])
     output_encoding = output.get("encoding", "utf-8")
-    output_options = csv_options(output, ",")
+    output_options = output_csv_options(output)
     output_format = output.get("format", "csv")
     mode = output.get("mode", "replace")
     atomic = bool(output.get("atomic_write", mode == "replace")) and mode == "replace" and not dry_run
@@ -627,6 +669,7 @@ def process(
             source_stats: Counter[str] = Counter()
             encoding = source.get("encoding", "utf-8")
             source_kind = input_format(source)
+            source_mapping, constants = mapping_parts(source)
             if source_kind == "csv":
                 delimiter = source.get("delimiter")
                 if delimiter is None:
@@ -643,12 +686,14 @@ def process(
                     header = next(reader, None) if has_header else None
                     if has_header and header is None:
                         raise ConfigError(f"Input {path} declares a header but is empty.")
-                    index_mapping = make_index_mapping(source, header, fields, options["delimiter"])
+                    index_mapping = make_index_mapping(
+                        source, source_mapping, header, fields, options["delimiter"]
+                    )
                     max_index = max((index for index, _ in index_mapping), default=-1)
                     for source_row_number, values in enumerate(reader, start=2 if has_header else 1):
                         stats["rows_read"] += 1
                         source_stats["rows_read"] += 1
-                        row = {field: "" for field in fields}
+                        row = row_with_constants(fields, constants)
                         if len(values) <= max_index:
                             malformed = source.get("on_malformed_row", "error")
                             message = (
@@ -678,7 +723,7 @@ def process(
             elif source_kind == "jsonl":
                 if info:
                     info(f"Processing {path}: JSONL.")
-                key_mapping = list(source["mapping"].items())
+                key_mapping = list(source_mapping.items())
                 with path.open("r", encoding=encoding, newline="") as handle:
                     for source_row_number, raw_line in enumerate(handle, start=1):
                         stats["rows_read"] += 1
@@ -694,7 +739,7 @@ def process(
                             stats["rows_skipped"] += 1
                             source_stats["rows_skipped"] += 1
                             continue
-                        row = {field: "" for field in fields}
+                        row = row_with_constants(fields, constants)
                         for source_key, target_field in key_mapping:
                             row[target_field] = json_value_to_csv(record.get(source_key))
                         if output.get("add_provenance", False):
@@ -749,8 +794,8 @@ def process(
                         stats["rows_skipped"] += 1
                         source_stats["rows_skipped"] += 1
                         continue
-                    row = {field: "" for field in fields}
-                    for source_key, target_field in source["mapping"].items():
+                    row = row_with_constants(fields, constants)
+                    for source_key, target_field in source_mapping.items():
                         row[target_field] = json_value_to_csv(record.get(source_key))
                     if output.get("add_provenance", False):
                         row["source_file"] = str(path)
