@@ -1,6 +1,6 @@
 {
   "output": {
-    "path": "./output/indicator-notes.json",
+    "path": "../output/indicator-notes.json",
     "format": "stix",
     "encoding": "utf-8",
     "columns": ["Title", "Content", "Source ID"],
@@ -19,7 +19,7 @@
   },
   "inputs": [
     {
-      "path": "./input/threat-intelligence.json",
+      "path": "../input/threat-intelligence.json",
       "format": "stix",
       "encoding": "utf-8",
       "mapping": {
@@ -38,7 +38,7 @@
   },
   "validation": {
     "on_error": "reject",
-    "rejects_path": "./output/stix-rejects.csv",
+    "rejects_path": "../output/stix-rejects.csv",
     "rules": [
       { "column": "Title", "type": "required" },
       { "column": "Content", "type": "required" }

@@ -2,7 +2,7 @@
   "catalog_note": "This is a configuration reference, not a directly runnable job. Copy exactly one *_job object into your own job.json, then replace the illustrative paths and mappings.",
   "csv_replace_job": {
     "output": {
-      "path": "./output/merged.csv",
+      "path": "../output/merged.csv",
       "format": "csv",
       "delimiter": ";",
       "quotechar": "\"",
@@ -128,7 +128,7 @@
     ],
     "validation": {
       "on_error": "reject",
-      "rejects_path": "./output/rejected.csv",
+      "rejects_path": "../output/rejected.csv",
       "rules": [
         { "column": "Place", "type": "required" },
         { "column": "Date", "type": "date", "format": "%Y-%m-%d" },
@@ -160,7 +160,7 @@
   },
   "csv_append_job": {
     "output": {
-      "path": "./output/incremental.csv",
+      "path": "../output/incremental.csv",
       "format": "csv",
       "delimiter": ",",
       "encoding": "utf-8",
@@ -182,7 +182,7 @@
   },
   "json_output_job": {
     "output": {
-      "path": "./output/records.json",
+      "path": "../output/records.json",
       "format": "json",
       "encoding": "utf-8",
       "mode": "replace",
@@ -202,7 +202,7 @@
   },
   "jsonl_output_job": {
     "output": {
-      "path": "./output/records.jsonl",
+      "path": "../output/records.jsonl",
       "format": "jsonl",
       "encoding": "utf-8",
       "mode": "append",
@@ -222,7 +222,7 @@
   },
   "stix_output_job": {
     "output": {
-      "path": "./output/notes.json",
+      "path": "../output/notes.json",
       "format": "stix",
       "encoding": "utf-8",
       "mode": "replace",

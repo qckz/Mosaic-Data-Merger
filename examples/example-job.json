@@ -1,6 +1,6 @@
 {
   "output": {
-    "path": "./output/customers.csv",
+    "path": "../output/customers.csv",
     "delimiter": ";",
     "encoding": "utf-8",
     "columns": ["Place", "Name", "Date", "Source"],
@@ -11,7 +11,7 @@
   },
   "inputs": [
     {
-      "path": "./data/list_*.csv",
+      "path": "../input/list_*.csv",
       "header": false,
       "delimiter": ",",
       "mapping": {
@@ -25,7 +25,7 @@
       "on_malformed_row": "pad"
     },
     {
-      "path": "./data/customers.csv",
+      "path": "../input/customers.csv",
       "header": true,
       "delimiter": ";",
       "mapping": {
@@ -35,7 +35,7 @@
       }
     },
     {
-      "path": "./data/events.jsonl",
+      "path": "../input/events.jsonl",
       "format": "jsonl",
       "encoding": "utf-8",
       "mapping": {
@@ -64,7 +64,7 @@
   ],
   "validation": {
     "on_error": "reject",
-    "rejects_path": "./output/customer-rejects.csv",
+    "rejects_path": "../output/customer-rejects.csv",
     "rules": [
       { "column": "Place", "type": "required" },
       { "column": "Date", "type": "date", "format": "%Y-%m-%d" }
