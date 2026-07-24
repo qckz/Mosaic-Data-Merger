@@ -19,7 +19,7 @@ def apply_action(value: str, action: dict[str, Any]) -> str:
         return value.upper()
     if action_type == "title_case":
         return value.title()
-    if action_type == "set_default":
+    if action_type == "default_if_empty":
         return str(action.get("value", "")) if value == "" else value
     if action_type == "replace":
         if "old" not in action:

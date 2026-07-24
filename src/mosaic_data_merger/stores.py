@@ -13,7 +13,7 @@ from typing import Any
 
 from .csvio import csv_options, detect_dialect
 from .errors import ConfigError, RowError
-from .mapping import make_index_mapping, resolve_header
+from .mapping import MappingRule, make_index_mapping, resolve_header
 from .paths import expand_input_paths
 
 
@@ -124,7 +124,11 @@ def load_exclusions(
                     header = next(reader, None) if has_header else None
                     if has_header and header is None:
                         raise ConfigError(f"Exclusion list {path} declares a header but is empty.")
-                    index_mapping = make_index_mapping(rule, rule["mapping"], header, fields, options["delimiter"])
+                    mapping_rules = [
+                        MappingRule(source_column, output_column)
+                        for source_column, output_column in rule["mapping"].items()
+                    ]
+                    index_mapping = make_index_mapping(rule, mapping_rules, header, fields, options["delimiter"])
                     max_index = max((index for index, _ in index_mapping), default=-1)
                     for row_number, values in enumerate(reader, start=2 if has_header else 1):
                         summary["rows_read"] += 1
@@ -140,8 +144,8 @@ def load_exclusions(
                                 summary["rows_skipped"] += 1
                                 continue
                         exclusion_row = {field: "" for field in fields}
-                        for source_index, target in index_mapping:
-                            exclusion_row[target] = values[source_index] if source_index < len(values) else ""
+                        for source_index, mapping_rule in index_mapping:
+                            exclusion_row[mapping_rule.output_column] = values[source_index] if source_index < len(values) else ""
                         key_values = [exclusion_row[column] for column in rule["keys"]]
                         if not rule.get("allow_empty_keys", False) and any(value == "" for value in key_values):
                             summary["empty_keys_skipped"] += 1

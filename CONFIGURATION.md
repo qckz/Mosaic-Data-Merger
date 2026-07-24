@@ -88,7 +88,23 @@ For a source with headers, source names are supported alongside positions:
 
 The same output field may be supplied by different inputs. For example, column `1` from a headerless CSV and key `city` from a JSONL file can both map to `Place`.
 
-A field may be mapped to the same output field in different input files. Missing fields in a particular source are emitted empty, and transformations such as `set_default` can fill them. Within a single source, mapping two source fields to one output field is rejected to prevent accidental overwrites. Any or all source fields can be mapped; unmapped source fields are ignored.
+A field may be mapped to the same output field in different input files. Missing fields in a particular source are emitted empty, and transformations such as `default_if_empty` can fill blank values. Within a single source, mapping two source fields to one output field is rejected to prevent accidental overwrites. Any or all source fields can be mapped; unmapped source fields are ignored.
+
+### Default for a missing source field
+
+Use an object mapping when an input schema may not contain a particular field. `default_if_missing` applies only when the source CSV header or JSON/STIX key is absent; an existing blank value remains blank.
+
+```json
+"mapping": {
+  "City": "Place",
+  "Country": {
+    "output_column": "Country",
+    "default_if_missing": "Unknown"
+  }
+}
+```
+
+For a CSV with a `Country` header, its value is mapped to `Country`. If that header is absent, the output value is `Unknown`. Pair this with `default_if_empty` when blank values in an existing column should receive the same fallback.
 
 ### Fixed input values
 
@@ -215,7 +231,7 @@ The tool generates Bundle and object IDs and STIX 2.1 timestamps by default; set
 Transformations run in the configured order for each output field. Available types:
 
 - `trim`, `lowercase`, `uppercase`, `title_case`
-- `set_default` (`value` is used only when the field is empty)
+- `default_if_empty` (`value` is used only when the field is empty)
 - `replace` (`old`, optional `new`)
 - `null_if` (`values` array)
 - `date_format` (`input_formats` array and `output_format`)
@@ -226,7 +242,7 @@ For example, this replaces a missing place, removes surrounding whitespace, and 
 "transformations": {
   "Place": [
     { "type": "trim" },
-    { "type": "set_default", "value": "Unknown" }
+    { "type": "default_if_empty", "value": "Unknown" }
   ],
   "Date": [
     {

@@ -314,6 +314,52 @@ class CsvMergeTests(unittest.TestCase):
                 rows = list(csv.DictReader(handle))
             self.assertEqual(rows, [{"Place": "Amsterdam", "Source": "manual-import", "Priority": "10"}])
 
+    def test_default_if_missing_handles_absent_csv_headers_and_default_if_empty_handles_blanks(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / "people-missing.csv").write_text("City\nAmsterdam\n", encoding="utf-8")
+            (directory / "people-empty.csv").write_text("City,Country\nUtrecht,\n", encoding="utf-8")
+            config = {
+                "output": {"path": "out.csv", "columns": ["Place", "Country"]},
+                "inputs": [{
+                    "path": "people-*.csv",
+                    "header": True,
+                    "mapping": {
+                        "City": "Place",
+                        "Country": {
+                            "output_column": "Country",
+                            "default_if_missing": "Not supplied",
+                        },
+                    },
+                }],
+                "transformations": {
+                    "Country": [{"type": "default_if_empty", "value": "Unknown"}],
+                },
+            }
+            config_path = directory / "job.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            mosaic_data_merger.process(mosaic_data_merger.load_config(config_path))
+            with (directory / "out.csv").open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows, [
+                {"Place": "Utrecht", "Country": "Unknown"},
+                {"Place": "Amsterdam", "Country": "Not supplied"},
+            ])
+
+    def test_set_default_is_not_a_supported_transformation_name(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / "people.csv").write_text("City\nAmsterdam\n", encoding="utf-8")
+            config = {
+                "output": {"path": "out.csv", "columns": ["Place"]},
+                "inputs": [{"path": "people.csv", "mapping": {"City": "Place"}}],
+                "transformations": {"Place": [{"type": "set_default", "value": "Unknown"}]},
+            }
+            config_path = directory / "job.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            with self.assertRaisesRegex(mosaic_data_merger.ConfigError, "Unsupported transformation type: 'set_default'"):
+                mosaic_data_merger.process(mosaic_data_merger.load_config(config_path))
+
     def test_quote_all_quotes_every_csv_field_and_escapes_embedded_quotes(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             directory = Path(name)
