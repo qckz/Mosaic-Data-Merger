@@ -9,15 +9,15 @@ A job may have one input (a transformation) or many inputs (a merge). Its output
 ## Run a job
 
 ```bash
-python3 mosaic_data_merger.py validate --config example-job.json
-python3 mosaic_data_merger.py run --config example-job.json --report ./output/report.json
-python3 mosaic_data_merger.py run --config example-job.json --verbose
+python3 mosaic_data_merger.py validate --config examples/example-job.json
+python3 mosaic_data_merger.py run --config examples/example-job.json --report ./output/report.json
+python3 mosaic_data_merger.py run --config examples/example-job.json --verbose
 ```
 
 Use a dry run to execute mappings, transformations, filtering, validation, and deduplication without creating the output or rejects files:
 
 ```bash
-python3 mosaic_data_merger.py run --config example-job.json --dry-run
+python3 mosaic_data_merger.py run --config examples/example-job.json --dry-run
 ```
 
 Inspect an unfamiliar source before writing its configuration:
@@ -41,7 +41,7 @@ When a mapped header name cannot be found, the error now reports the delimiter u
 
 ## Job configuration
 
-Start by copying [example-job.json](example-job.json), then update its input and output paths for your job. For a complete STIX input-to-STIX Bundle output example, use [example-stix-job.json](example-stix-job.json). For every currently supported configuration option in copyable context, see [example-config-catalog.json](example-config-catalog.json): copy one `*_job` object into your own job file, rather than passing the catalog itself to the tool. Its paths are backed by the small [sample-data](sample-data) set, so you can validate the examples immediately. Relative paths are resolved from the configuration file's directory (not the current terminal directory). The top-level fields are:
+All sample configurations and data are organized in [examples](examples). Start by copying [examples/example-job.json](examples/example-job.json), then update its input and output paths for your job. For a complete STIX input-to-STIX Bundle output example, use [examples/example-stix-job.json](examples/example-stix-job.json). For every currently supported configuration option in copyable context, see [examples/config-catalog.json](examples/config-catalog.json): copy one `*_job` object into your own job file, rather than passing the catalog itself to the tool. Its paths are backed by the small [examples/data](examples/data) set, so you can validate the examples immediately. Relative paths are resolved from the configuration file's directory (not the current terminal directory). The top-level fields are:
 
 - `output`: destination, format, schema, delimiter/encoding, output mode, and provenance columns.
 - `inputs`: one specification per CSV, JSON, JSONL, or STIX source file, including its layout and field mapping.
@@ -227,7 +227,7 @@ STIX is JSON-based threat-intelligence data. A `stix` input accepts either a STI
 
 STIX output writes one configured STIX object for each normalized row and wraps them in a STIX 2.1 Bundle. `properties` maps output columns to properties on the generated STIX object; `static` supplies constant JSON-valued properties shared by every object.
 
-[example-stix-job.json](example-stix-job.json) is a complete STIX example: it reads `indicator` objects from a Bundle, maps `name`, `pattern`, and `id`, then emits one STIX `note` per accepted row. The configured `object_refs` value should be replaced with IDs relevant to your own feed.
+[examples/example-stix-job.json](examples/example-stix-job.json) is a complete STIX example: it reads `indicator` objects from a Bundle, maps `name`, `pattern`, and `id`, then emits one STIX `note` per accepted row. The configured `object_refs` value should be replaced with IDs relevant to your own feed.
 
 ```json
 "output": {

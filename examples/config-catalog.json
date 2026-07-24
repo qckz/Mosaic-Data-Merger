@@ -17,7 +17,7 @@
     },
     "inputs": [
       {
-        "path": "./sample-data/list_*.csv",
+        "path": "./data/list_*.csv",
         "format": "csv",
         "encoding": "utf-8",
         "header": false,
@@ -39,7 +39,7 @@
         }
       },
       {
-        "path": "./sample-data/customers.csv",
+        "path": "./data/customers.csv",
         "format": "csv",
         "header": true,
         "delimiter": ";",
@@ -52,7 +52,7 @@
         "on_malformed_row": "error"
       },
       {
-        "path": "./sample-data/variable-layout.csv",
+        "path": "./data/variable-layout.csv",
         "format": "csv",
         "header": "auto",
         "mapping": {
@@ -62,7 +62,7 @@
         "on_malformed_row": "skip"
       },
       {
-        "path": "./sample-data/events.jsonl",
+        "path": "./data/events.jsonl",
         "format": "jsonl",
         "encoding": "utf-8",
         "mapping": {
@@ -74,7 +74,7 @@
         "on_malformed_row": "skip"
       },
       {
-        "path": "./sample-data/people.json",
+        "path": "./data/people.json",
         "format": "json",
         "mapping": {
           "place": "Place",
@@ -84,7 +84,7 @@
         "on_malformed_row": "error"
       },
       {
-        "path": "./sample-data/threat-intelligence.json",
+        "path": "./data/threat-intelligence.json",
         "format": "stix",
         "mapping": {
           "name": "Name",
@@ -138,7 +138,7 @@
     },
     "exclusions": [
       {
-        "path": "./sample-data/exclusions_*.csv",
+        "path": "./data/exclusions_*.csv",
         "format": "csv",
         "encoding": "utf-8",
         "header": false,
@@ -171,7 +171,7 @@
     },
     "inputs": [
       {
-        "path": "./sample-data/records.csv",
+        "path": "./data/records.csv",
         "header": true,
         "mapping": {
           "City": "Place",
@@ -191,7 +191,7 @@
     },
     "inputs": [
       {
-        "path": "./sample-data/records.csv",
+        "path": "./data/records.csv",
         "header": true,
         "mapping": {
           "City": "Place",
@@ -211,7 +211,7 @@
     },
     "inputs": [
       {
-        "path": "./sample-data/records.jsonl",
+        "path": "./data/records.jsonl",
         "format": "jsonl",
         "mapping": {
           "city": "Place",
@@ -244,7 +244,7 @@
     },
     "inputs": [
       {
-        "path": "./sample-data/threat-intelligence.json",
+        "path": "./data/threat-intelligence.json",
         "format": "stix",
         "mapping": {
           "name": "Title",
