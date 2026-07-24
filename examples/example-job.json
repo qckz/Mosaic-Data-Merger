@@ -11,7 +11,7 @@
   },
   "inputs": [
     {
-      "path": "./input/locations-without-headers.csv",
+      "path": "./data/list_*.csv",
       "header": false,
       "delimiter": ",",
       "mapping": {
@@ -25,7 +25,7 @@
       "on_malformed_row": "pad"
     },
     {
-      "path": "./input/customers-with-headers.csv",
+      "path": "./data/customers.csv",
       "header": true,
       "delimiter": ";",
       "mapping": {
@@ -35,13 +35,13 @@
       }
     },
     {
-      "path": "./input/customers.jsonl",
+      "path": "./data/events.jsonl",
       "format": "jsonl",
       "encoding": "utf-8",
       "mapping": {
         "city": "Place",
         "full_name": "Name",
-        "created_at": "Date"
+        "event_date": "Date"
       },
       "on_malformed_row": "skip"
     }

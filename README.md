@@ -2,31 +2,44 @@
 
 An offline, schema-driven data transformation, merge, and exclusion tool.
 
-`mosaic_data_merger.py` transforms CSV, JSON, JSONL, and STIX 2.1 files into CSV, JSON, JSONL, or STIX output. CSV and JSONL are processed row-by-row; regular JSON and STIX Bundles are read as complete JSON documents. It needs only Python 3.10+ and the standard library.
+Mosaic Data Merger transforms CSV, JSON, JSONL, and STIX 2.1 files into CSV, JSON, JSONL, or STIX output. CSV and JSONL are processed row-by-row; regular JSON and STIX Bundles are read as complete JSON documents. It needs only Python 3.10+ and the standard library.
 
 A job may have one input (a transformation) or many inputs (a merge). Its output format is selected per job: CSV, JSON, JSONL, or STIX 2.1.
+
+## Install
+
+For an installed command suitable for automation, install the project once from its checkout:
+
+```bash
+python3 -m pip install .
+mosaic-data-merger validate --config /path/to/job.json
+```
+
+For development, `python3 -m pip install -e .` keeps the command linked to your working copy. You can also run from the checkout without installing by setting `PYTHONPATH=src`, for example `PYTHONPATH=src python3 -m mosaic_data_merger validate --config /path/to/job.json`.
+
+The project deliberately has no third-party runtime dependencies. Its package layout and extension points are described in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Run a job
 
 ```bash
-python3 mosaic_data_merger.py validate --config examples/example-job.json
-python3 mosaic_data_merger.py run --config examples/example-job.json --report ./output/report.json
-python3 mosaic_data_merger.py run --config examples/example-job.json --verbose
+python3 -m mosaic_data_merger validate --config examples/example-job.json
+python3 -m mosaic_data_merger run --config examples/example-job.json --report ./output/report.json
+python3 -m mosaic_data_merger run --config examples/example-job.json --verbose
 ```
 
 Use a dry run to execute mappings, transformations, filtering, validation, and deduplication without creating the output or rejects files:
 
 ```bash
-python3 mosaic_data_merger.py run --config examples/example-job.json --dry-run
+python3 -m mosaic_data_merger run --config examples/example-job.json --dry-run
 ```
 
 Inspect an unfamiliar source before writing its configuration:
 
 ```bash
-python3 mosaic_data_merger.py inspect ./input/source.csv
-python3 mosaic_data_merger.py inspect ./input/source.csv --encoding windows-1252 --delimiter ';'
-python3 mosaic_data_merger.py inspect ./input/events.jsonl
-python3 mosaic_data_merger.py inspect ./input/threat-intelligence.json --format stix
+python3 -m mosaic_data_merger inspect ./input/source.csv
+python3 -m mosaic_data_merger inspect ./input/source.csv --encoding windows-1252 --delimiter ';'
+python3 -m mosaic_data_merger inspect ./input/events.jsonl
+python3 -m mosaic_data_merger inspect ./input/threat-intelligence.json --format stix
 ```
 
 The commands print JSON, which makes their output easy to store in automation logs.

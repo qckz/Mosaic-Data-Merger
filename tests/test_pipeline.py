@@ -9,7 +9,7 @@ import mosaic_data_merger
 
 class CsvMergeTests(unittest.TestCase):
     def test_configuration_catalog_jobs_validate_against_sample_data(self) -> None:
-        project_directory = Path(__file__).parent
+        project_directory = Path(__file__).parent.parent
         examples_directory = project_directory / "examples"
         catalog = json.loads((examples_directory / "config-catalog.json").read_text(encoding="utf-8"))
         for name, job in catalog.items():
