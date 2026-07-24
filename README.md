@@ -2,9 +2,9 @@
 
 An offline, schema-driven data transformation, merge, and exclusion tool.
 
-`mosaic_data_merger.py` transforms CSV, JSON, JSONL, and STIX 2.1 files into CSV, JSON, or STIX output. CSV and JSONL are processed row-by-row; regular JSON and STIX Bundles are read as complete JSON documents. It needs only Python 3.10+ and the standard library.
+`mosaic_data_merger.py` transforms CSV, JSON, JSONL, and STIX 2.1 files into CSV, JSON, JSONL, or STIX output. CSV and JSONL are processed row-by-row; regular JSON and STIX Bundles are read as complete JSON documents. It needs only Python 3.10+ and the standard library.
 
-A job may have one input (a transformation) or many inputs (a merge). Its output format is selected per job: CSV, JSON, or STIX 2.1.
+A job may have one input (a transformation) or many inputs (a merge). Its output format is selected per job: CSV, JSON, JSONL, or STIX 2.1.
 
 ## Run a job
 
@@ -57,7 +57,7 @@ Start by copying [example-job.json](example-job.json), then update its input and
 | Option | Required | Meaning |
 |---|---:|---|
 | `path` | Yes | Output filename and location. Its parent directories are created when needed. |
-| `format` | No | `csv` (default), `json` (a JSON array of output records), or `stix` (a STIX 2.1 Bundle). |
+| `format` | No | `csv` (default), `json` (a JSON array), `jsonl` (one JSON object per line), or `stix` (a STIX 2.1 Bundle). |
 | `columns` | Yes | Ordered output header names. Every mapping target must appear here. |
 | `delimiter` | No | One-character CSV delimiter; defaults to `,`. It also controls CSV rejects output. |
 | `quote_all` | No | CSV only. When `true`, enclose every header and field in double quotes; defaults to `false`. Embedded `"` characters become `""`. |
@@ -66,7 +66,7 @@ Start by copying [example-job.json](example-job.json), then update its input and
 | `atomic_write` | No | With `replace` (the default), write a temporary file and replace the destination only after success. |
 | `add_provenance` | No | Adds `source_file` and `source_row` columns automatically. |
 
-Appending checks that the existing CSV header is exactly the configured output schema. JSON and STIX output always use `replace`; `atomic_write` cannot be used with append mode.
+Appending checks that the existing CSV header is exactly the configured output schema. JSONL appends one complete JSON object per line without a header. JSON-array and STIX output always use `replace`; `atomic_write` cannot be used with append mode.
 
 ### Input options
 
@@ -197,6 +197,17 @@ Set `"format": "json"` in `output` to write a JSON array. The configured `output
 }
 ```
 
+Set `"format": "jsonl"` in `output` to write one JSON object per line. JSONL is streamed and can be appended safely, which is useful for incremental automation:
+
+```json
+"output": {
+  "path": "./output/customers.jsonl",
+  "format": "jsonl",
+  "mode": "append",
+  "columns": ["Place", "Name", "Date"]
+}
+```
+
 ### STIX 2.1 input and output
 
 STIX is JSON-based threat-intelligence data. A `stix` input accepts either a STIX Bundle or one STIX object. For a Bundle, each object in `objects` is processed as one source record. Top-level STIX properties such as `type`, `id`, `name`, `pattern`, and `created` can be mapped to output columns; nested values are preserved as compact JSON strings.
@@ -289,7 +300,7 @@ For CSV, `on_malformed_row` controls rows that are too short for the requested m
 
 ### Excluding rows with a CSV list
 
-Use top-level `exclusions` to remove normalized rows that appear in one or more CSV exclusion lists. Exclusions run after transformations and ordinary filters, but before validation, deduplication, and writing the CSV, JSON, or STIX output.
+Use top-level `exclusions` to remove normalized rows that appear in one or more CSV exclusion lists. Exclusions run after transformations and ordinary filters, but before validation, deduplication, and writing the CSV, JSON, JSONL, or STIX output.
 
 ```json
 "exclusions": [

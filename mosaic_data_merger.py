@@ -198,15 +198,15 @@ def validate_config(config: dict[str, Any], check_inputs: bool = True) -> list[s
     if not isinstance(output.get("path"), str) or not output["path"]:
         raise ConfigError("output.path must be a non-empty path.")
     output_format = output.get("format", "csv")
-    if output_format not in {"csv", "json", "stix"}:
-        raise ConfigError("output.format must be 'csv', 'json', or 'stix'.")
+    if output_format not in {"csv", "json", "jsonl", "stix"}:
+        raise ConfigError("output.format must be 'csv', 'json', 'jsonl', or 'stix'.")
     if output_format != "csv" and output.get("quote_all", False):
         raise ConfigError("output.quote_all is available only for CSV output.")
     output_csv_options(output)
     if output.get("mode", "replace") not in {"replace", "append"}:
         raise ConfigError("output.mode must be 'replace' or 'append'.")
-    if output_format != "csv" and output.get("mode", "replace") == "append":
-        raise ConfigError("output.mode 'append' is available only for CSV output.")
+    if output_format not in {"csv", "jsonl"} and output.get("mode", "replace") == "append":
+        raise ConfigError("output.mode 'append' is available only for CSV or JSONL output.")
     if output.get("mode", "replace") == "append" and output.get("atomic_write", False):
         raise ConfigError("atomic_write is only available with output.mode 'replace'.")
     if output_format == "stix":
@@ -709,6 +709,20 @@ class JsonArrayWriter:
         self.handle.close()
 
 
+class JsonLinesWriter:
+    """Write one normalized JSON object per line, suitable for append mode."""
+
+    def __init__(self, handle: Any) -> None:
+        self.handle = handle
+
+    def writerow(self, row: dict[str, str]) -> None:
+        json.dump(row, self.handle, ensure_ascii=False, separators=(",", ":"))
+        self.handle.write("\n")
+
+    def close(self) -> None:
+        self.handle.close()
+
+
 class StixBundleWriter:
     """Write one configured STIX 2.1 object per normalized row into a Bundle."""
 
@@ -812,6 +826,8 @@ def process(
                     writer.writeheader()
             elif output_format == "json":
                 writer = JsonArrayWriter(output_handle)
+            elif output_format == "jsonl":
+                writer = JsonLinesWriter(output_handle)
             else:
                 writer = StixBundleWriter(output_handle, output["stix"])
 
@@ -969,7 +985,7 @@ def process(
                     )
                 stats["files"].append({"path": str(path), **dict(source_stats), "format": source_kind})
         if output_handle:
-            if isinstance(writer, (JsonArrayWriter, StixBundleWriter)):
+            if isinstance(writer, (JsonArrayWriter, JsonLinesWriter, StixBundleWriter)):
                 writer.close()
             else:
                 output_handle.close()

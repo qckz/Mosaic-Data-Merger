@@ -137,6 +137,39 @@ class CsvMergeTests(unittest.TestCase):
                 [{"Place": "Amsterdam", "Name": "Alice"}, {"Place": "Utrecht", "Name": "Bob"}],
             )
 
+    def test_jsonl_output_streams_objects_and_supports_append(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / "people.csv").write_text("City,Name\nAmsterdam,Alice\nUtrecht,Bob\n", encoding="utf-8")
+            config = {
+                "output": {
+                    "path": "out/people.jsonl",
+                    "format": "jsonl",
+                    "mode": "append",
+                    "columns": ["Place", "Name"],
+                },
+                "inputs": [{
+                    "path": "people.csv",
+                    "mapping": {"City": "Place", "Name": "Name"},
+                }],
+            }
+            config_path = directory / "job.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            first_report = mosaic_data_merger.process(mosaic_data_merger.load_config(config_path))
+            second_report = mosaic_data_merger.process(mosaic_data_merger.load_config(config_path))
+            self.assertEqual(first_report["rows_written"], 2)
+            self.assertEqual(second_report["rows_written"], 2)
+            lines = (directory / "out/people.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(
+                [json.loads(line) for line in lines],
+                [
+                    {"Place": "Amsterdam", "Name": "Alice"},
+                    {"Place": "Utrecht", "Name": "Bob"},
+                    {"Place": "Amsterdam", "Name": "Alice"},
+                    {"Place": "Utrecht", "Name": "Bob"},
+                ],
+            )
+
     def test_stix_bundle_input_and_output(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             directory = Path(name)
