@@ -123,7 +123,7 @@ For example:
 
 All transformations should remain explicit about their input column, output column, handling of missing values, and error behavior.
 
-### Scope guardrails
+### Operational principles
 
 The 0.6 work should preserve Mosaic's current operational principles:
 
@@ -133,7 +133,7 @@ The 0.6 work should preserve Mosaic's current operational principles:
 - keep output reports accurate when transformations remove, reject, skip, or expand records;
 - document each configuration option alongside an example.
 
-## Candidates after 0.6
+## Future ideas
 
 These are useful directions, but are intentionally not committed to the next release:
 
@@ -144,5 +144,3 @@ These are useful directions, but are intentionally not committed to the next rel
 - aggregation and group-by operations;
 - checkpointing for resumable very-large jobs;
 - additional format adapters such as XML, Parquet, or spreadsheet input.
-
-New formats and high-level ETL features should be added only when they fit the offline, schema-driven design and have a clear use case.
