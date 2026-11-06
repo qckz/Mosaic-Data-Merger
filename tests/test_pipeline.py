@@ -314,6 +314,141 @@ class CsvMergeTests(unittest.TestCase):
                 rows = list(csv.DictReader(handle))
             self.assertEqual(rows, [{"Place": "Amsterdam", "Source": "manual-import", "Priority": "10"}])
 
+    def test_default_if_missing_handles_absent_csv_headers_and_default_if_empty_handles_blanks(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / "people-missing.csv").write_text("City\nAmsterdam\n", encoding="utf-8")
+            (directory / "people-empty.csv").write_text("City,Country\nUtrecht,\n", encoding="utf-8")
+            config = {
+                "output": {"path": "out.csv", "columns": ["Place", "Country"]},
+                "inputs": [{
+                    "path": "people-*.csv",
+                    "header": True,
+                    "mapping": {
+                        "City": "Place",
+                        "Country": {
+                            "output_column": "Country",
+                            "default_if_missing": "Not supplied",
+                        },
+                    },
+                }],
+                "transformations": {
+                    "Country": [{"type": "default_if_empty", "value": "Unknown"}],
+                },
+            }
+            config_path = directory / "job.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            mosaic_data_merger.process(mosaic_data_merger.load_config(config_path))
+            with (directory / "out.csv").open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows, [
+                {"Place": "Utrecht", "Country": "Unknown"},
+                {"Place": "Amsterdam", "Country": "Not supplied"},
+            ])
+
+    def test_set_default_is_not_a_supported_transformation_name(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / "people.csv").write_text("City\nAmsterdam\n", encoding="utf-8")
+            config = {
+                "output": {"path": "out.csv", "columns": ["Place"]},
+                "inputs": [{"path": "people.csv", "mapping": {"City": "Place"}}],
+                "transformations": {"Place": [{"type": "set_default", "value": "Unknown"}]},
+            }
+            config_path = directory / "job.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            with self.assertRaisesRegex(mosaic_data_merger.ConfigError, "Unsupported transformation type: 'set_default'"):
+                mosaic_data_merger.process(mosaic_data_merger.load_config(config_path))
+
+    def test_invalid_transformations_fail_validation_without_reading_rows(self) -> None:
+        invalid_actions = [
+            {"type": "set_default", "value": "Unknown"},
+            {"type": "typo"},
+            "trim",
+            {"type": "replace"},
+            {"type": "null_if", "values": "NA"},
+            {"type": "date_format", "input_formats": [], "output_format": "%Y"},
+            {"type": "date_format", "input_formats": [123], "output_format": "%Y"},
+        ]
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / "empty.csv").write_text("Name\n", encoding="utf-8")
+            output = directory / "out.csv"
+            output.write_text("existing output\n", encoding="utf-8")
+            for action in invalid_actions:
+                with self.subTest(action=action):
+                    config = {
+                        "_config_directory": str(directory),
+                        "output": {"path": "out.csv", "columns": ["Name"], "atomic_write": False},
+                        "inputs": [{"path": "empty.csv", "mapping": {"Name": "Name"}}],
+                        "transformations": {"Name": [action]},
+                    }
+                    with self.assertRaises(mosaic_data_merger.ConfigError):
+                        mosaic_data_merger.validate_config(config)
+                    with self.assertRaises(mosaic_data_merger.ConfigError):
+                        mosaic_data_merger.process(config)
+                    self.assertEqual(output.read_text(encoding="utf-8"), "existing output\n")
+
+    def test_missing_defaults_preserve_present_values_for_json_formats(self) -> None:
+        values = [None, "", False, 0, ["a", "b"], {"a": 1}]
+        records = [{"type": "note", "id": "note--missing"}] + [
+            {"type": "note", "id": f"note--{index}", "value": value}
+            for index, value in enumerate(values)
+        ]
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            for source_format in ("json", "jsonl", "stix"):
+                with self.subTest(format=source_format):
+                    source_path = directory / ("source." + source_format)
+                    if source_format == "jsonl":
+                        content = "\n".join(json.dumps(record) for record in records) + "\n"
+                    elif source_format == "stix":
+                        content = json.dumps({"type": "bundle", "id": "bundle--test", "objects": records})
+                    else:
+                        content = json.dumps(records)
+                    source_path.write_text(content, encoding="utf-8")
+                    config = {
+                        "_config_directory": str(directory),
+                        "output": {"path": "out.json", "format": "json", "columns": ["Value", "Absent"]},
+                        "inputs": [{
+                            "path": str(source_path), "format": source_format,
+                            "mapping": {
+                                "value": {"output_column": "Value", "default_if_missing": "fallback"},
+                                "absent": {"output_column": "Absent", "default_if_missing": None},
+                            },
+                        }],
+                    }
+                    report = mosaic_data_merger.process(config)
+                    rows = json.loads((directory / "out.json").read_text(encoding="utf-8"))
+                    self.assertEqual([row["Value"] for row in rows], [
+                        "fallback", "", "", "false", "0", '["a","b"]', '{"a":1}',
+                    ])
+                    self.assertTrue(all(row["Absent"] == "" for row in rows))
+                    self.assertEqual(report["rows_written"], 7)
+
+    def test_headerless_optional_position_defaults_only_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / "source.csv").write_text("Alice\nBob,\nCara,NL\n", encoding="utf-8")
+            config = {
+                "_config_directory": str(directory),
+                "output": {"path": "out.json", "format": "json", "columns": ["Name", "Country"]},
+                "inputs": [{
+                    "path": "source.csv", "header": False, "delimiter": ",",
+                    "mapping": {
+                        "1": "Name",
+                        "2": {"output_column": "Country", "default_if_missing": "Unknown"},
+                    },
+                }],
+            }
+            report = mosaic_data_merger.process(config)
+            self.assertEqual(json.loads((directory / "out.json").read_text(encoding="utf-8")), [
+                {"Name": "Alice", "Country": "Unknown"},
+                {"Name": "Bob", "Country": ""},
+                {"Name": "Cara", "Country": "NL"},
+            ])
+            self.assertEqual(report["rows_skipped"], 0)
+
     def test_quote_all_quotes_every_csv_field_and_escapes_embedded_quotes(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             directory = Path(name)

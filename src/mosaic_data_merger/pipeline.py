@@ -161,7 +161,7 @@ def process(
             source_stats: Counter[str] = Counter()
             encoding = source.get("encoding", "utf-8")
             source_kind = input_format(source)
-            source_mapping, constants = mapping_parts(source)
+            mapping_rules, constants = mapping_parts(source)
             if source_kind == "csv":
                 delimiter = source.get("delimiter")
                 if delimiter is None:
@@ -179,13 +179,16 @@ def process(
                     if has_header and header is None:
                         raise ConfigError(f"Input {path} declares a header but is empty.")
                     index_mapping = make_index_mapping(
-                        source, source_mapping, header, fields, options["delimiter"]
+                        source, mapping_rules, header, fields, options["delimiter"]
                     )
-                    max_index = max((index for index, _ in index_mapping), default=-1)
+                    max_index = max(
+                        (index for index, rule in index_mapping if not rule.has_default_if_missing),
+                        default=-1,
+                    )
                     for source_row_number, values in enumerate(reader, start=2 if has_header else 1):
                         stats["rows_read"] += 1
                         source_stats["rows_read"] += 1
-                        row = row_with_constants(fields, constants)
+                        row = row_with_constants(fields, constants, mapping_rules)
                         if len(values) <= max_index:
                             malformed = source.get("on_malformed_row", "error")
                             message = (
@@ -199,8 +202,9 @@ def process(
                                 stats["rows_skipped"] += 1
                                 source_stats["rows_skipped"] += 1
                                 continue
-                        for index, target_field in index_mapping:
-                            row[target_field] = values[index] if index < len(values) else ""
+                        for index, rule in index_mapping:
+                            if index < len(values):
+                                row[rule.output_column] = values[index]
                         if output.get("add_provenance", False):
                             row["source_file"] = str(path)
                             row["source_row"] = str(source_row_number)
@@ -215,7 +219,6 @@ def process(
             elif source_kind == "jsonl":
                 if info:
                     info(f"Processing {path}: JSONL.")
-                key_mapping = list(source_mapping.items())
                 with path.open("r", encoding=encoding, newline="") as handle:
                     for source_row_number, raw_line in enumerate(handle, start=1):
                         stats["rows_read"] += 1
@@ -231,9 +234,10 @@ def process(
                             stats["rows_skipped"] += 1
                             source_stats["rows_skipped"] += 1
                             continue
-                        row = row_with_constants(fields, constants)
-                        for source_key, target_field in key_mapping:
-                            row[target_field] = json_value_to_csv(record.get(source_key))
+                        row = row_with_constants(fields, constants, mapping_rules)
+                        for rule in mapping_rules:
+                            if rule.source_column in record:
+                                row[rule.output_column] = json_value_to_csv(record[rule.source_column])
                         if output.get("add_provenance", False):
                             row["source_file"] = str(path)
                             row["source_row"] = str(source_row_number)
@@ -286,9 +290,10 @@ def process(
                         stats["rows_skipped"] += 1
                         source_stats["rows_skipped"] += 1
                         continue
-                    row = row_with_constants(fields, constants)
-                    for source_key, target_field in source_mapping.items():
-                        row[target_field] = json_value_to_csv(record.get(source_key))
+                    row = row_with_constants(fields, constants, mapping_rules)
+                    for rule in mapping_rules:
+                        if rule.source_column in record:
+                            row[rule.output_column] = json_value_to_csv(record[rule.source_column])
                     if output.get("add_provenance", False):
                         row["source_file"] = str(path)
                         row["source_row"] = str(source_row_number)

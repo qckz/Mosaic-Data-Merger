@@ -2,6 +2,13 @@
 
 All notable changes to Mosaic Data Merger are documented here.
 
+## 0.5.5
+
+- Added descriptive optional mappings with `output_column` and `default_if_missing`, so CSV, JSON, JSONL, and STIX sources can use a fallback when a source field does not exist.
+- Renamed the empty-value transformation from `set_default` to `default_if_empty`. The old name is no longer accepted.
+- Validate transformation names and parameters before processing, including jobs with empty inputs.
+- Added configuration and CLI-report reference manuals, and a roadmap for planned features.
+
 ## 0.5.0
 
 This is the first public, pre-1.0 feature release of Mosaic Data Merger.

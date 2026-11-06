@@ -10,6 +10,7 @@ from .csvio import csv_options, output_csv_options
 from .errors import ConfigError
 from .mapping import input_format, mapping_parts
 from .paths import expand_input_paths
+from .processing import validate_action
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -110,17 +111,18 @@ def validate_config(config: dict[str, Any], check_inputs: bool = True) -> list[s
         constants = mapping.get("$constants", {})
         if not isinstance(constants, dict):
             raise ConfigError(f"inputs[{index}].mapping.$constants must be an object.")
-        source_mapping, constants = mapping_parts(source)
-        if not source_mapping and not constants:
+        mapping_rules, constants = mapping_parts(source)
+        if not mapping_rules and not constants:
             raise ConfigError(f"inputs[{index}].mapping must map a source field or define $constants.")
-        targets = list(source_mapping.values())
+        targets = [rule.output_column for rule in mapping_rules]
         if not all(isinstance(target, str) and target in columns for target in targets):
             raise ConfigError(f"inputs[{index}].mapping targets must be names in output.columns.")
         if not all(isinstance(target, str) and target in columns for target in constants):
             raise ConfigError(f"inputs[{index}].mapping.$constants keys must be names in output.columns.")
         if len(set([*targets, *constants])) != len([*targets, *constants]):
             raise ConfigError(f"inputs[{index}] maps more than one value to an output field.")
-        for source_column in source_mapping:
+        for rule in mapping_rules:
+            source_column = rule.source_column
             if not isinstance(source_column, str) or not source_column:
                 raise ConfigError(f"inputs[{index}] has an invalid mapping key.")
             if source_kind == "csv" and source_column.isdigit() and int(source_column) < 1:
@@ -138,6 +140,8 @@ def validate_config(config: dict[str, Any], check_inputs: bool = True) -> list[s
     for column, actions in transforms.items():
         if column not in columns or not isinstance(actions, list):
             raise ConfigError("Each transformation column must exist and contain an action list.")
+        for action in actions:
+            validate_action(action)
 
     validation = config.get("validation", {})
     if not isinstance(validation, dict):

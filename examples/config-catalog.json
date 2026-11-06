@@ -13,7 +13,7 @@
       "mode": "replace",
       "atomic_write": true,
       "add_provenance": true,
-      "columns": ["Place", "Name", "Date", "Source", "Status", "Code", "Notes", "STIX ID"]
+      "columns": ["Place", "Name", "Date", "Source", "Status", "Country", "Code", "Notes", "STIX ID"]
     },
     "inputs": [
       {
@@ -32,6 +32,10 @@
           "1": "Place",
           "2": "Name",
           "4": "Date",
+          "Country": {
+            "output_column": "Country",
+            "default_if_missing": "Unknown"
+          },
           "$constants": {
             "Source": "list-import",
             "Status": "new"
@@ -98,7 +102,7 @@
       "Place": [
         { "type": "trim" },
         { "type": "title_case" },
-        { "type": "set_default", "value": "Unknown" }
+        { "type": "default_if_empty", "value": "Unknown" }
       ],
       "Name": [
         { "type": "trim" },

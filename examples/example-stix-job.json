@@ -33,7 +33,7 @@
   "transformations": {
     "Title": [
       { "type": "trim" },
-      { "type": "set_default", "value": "Imported threat-intelligence item" }
+      { "type": "default_if_empty", "value": "Imported threat-intelligence item" }
     ]
   },
   "validation": {

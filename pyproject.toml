@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mosaic-data-merger"
-version = "0.5.0"
+version = "0.5.5"
 description = "An offline, schema-driven data transformation, merge, and exclusion tool."
 readme = "README.md"
 requires-python = ">=3.10"

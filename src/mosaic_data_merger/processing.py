@@ -9,6 +9,30 @@ from typing import Any
 from .errors import ConfigError, RowError
 
 
+def validate_action(action: Any) -> None:
+    """Check transformation configuration even when no source rows are read."""
+    if not isinstance(action, dict):
+        raise ConfigError("Each transformation action must be an object.")
+    action_type = action.get("type")
+    if action_type not in (
+        "trim", "lowercase", "uppercase", "title_case", "default_if_empty",
+        "replace", "null_if", "date_format",
+    ):
+        raise ConfigError(f"Unsupported transformation type: {action_type!r}")
+    if action_type == "replace" and "old" not in action:
+        raise ConfigError("replace transformation requires 'old'.")
+    if action_type == "null_if" and not isinstance(action.get("values", []), list):
+        raise ConfigError("null_if transformation requires a values list.")
+    if action_type == "date_format":
+        formats = action.get("input_formats")
+        if (
+            not isinstance(formats, list) or not formats
+            or not all(isinstance(item, str) for item in formats)
+            or not isinstance(action.get("output_format"), str)
+        ):
+            raise ConfigError("date_format requires input_formats (a non-empty list of strings) and output_format.")
+
+
 def apply_action(value: str, action: dict[str, Any]) -> str:
     action_type = action.get("type")
     if action_type == "trim":
@@ -19,7 +43,7 @@ def apply_action(value: str, action: dict[str, Any]) -> str:
         return value.upper()
     if action_type == "title_case":
         return value.title()
-    if action_type == "set_default":
+    if action_type == "default_if_empty":
         return str(action.get("value", "")) if value == "" else value
     if action_type == "replace":
         if "old" not in action:

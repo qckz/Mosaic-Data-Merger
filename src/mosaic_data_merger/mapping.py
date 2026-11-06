@@ -3,11 +3,28 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .csvio import detect_dialect, header_is_likely
 from .errors import ConfigError
+
+
+_NO_DEFAULT = object()
+
+
+@dataclass(frozen=True)
+class MappingRule:
+    """Map one source field to an output field, optionally with a fallback."""
+
+    source_column: str
+    output_column: str
+    default_if_missing: Any = _NO_DEFAULT
+
+    @property
+    def has_default_if_missing(self) -> bool:
+        return self.default_if_missing is not _NO_DEFAULT
 
 
 def input_format(source: dict[str, Any]) -> str:
@@ -39,18 +56,44 @@ def json_value_to_csv(value: Any) -> str:
     return str(value)
 
 
-def mapping_parts(source: dict[str, Any]) -> tuple[dict[str, str], dict[str, Any]]:
-    """Separate ordinary source-field mappings from fixed output values."""
+def mapping_parts(source: dict[str, Any]) -> tuple[list[MappingRule], dict[str, Any]]:
+    """Separate source mappings, optional defaults, and fixed output values."""
     mapping = source["mapping"]
     constants = mapping.get("$constants", {})
-    source_mapping = {key: target for key, target in mapping.items() if key != "$constants"}
-    return source_mapping, constants
+    rules: list[MappingRule] = []
+    for source_column, specification in mapping.items():
+        if source_column == "$constants":
+            continue
+        if isinstance(specification, str):
+            rules.append(MappingRule(source_column, specification))
+            continue
+        if not isinstance(specification, dict):
+            raise ConfigError(
+                "Each mapping value must be an output column name or an object with "
+                "output_column and default_if_missing."
+            )
+        if set(specification) != {"output_column", "default_if_missing"}:
+            raise ConfigError(
+                "A default mapping must contain exactly output_column and default_if_missing."
+            )
+        output_column = specification["output_column"]
+        if not isinstance(output_column, str) or not output_column:
+            raise ConfigError("mapping.output_column must be a non-empty output column name.")
+        rules.append(
+            MappingRule(source_column, output_column, specification["default_if_missing"])
+        )
+    return rules, constants
 
 
-def row_with_constants(fields: list[str], constants: dict[str, Any]) -> dict[str, str]:
+def row_with_constants(
+    fields: list[str], constants: dict[str, Any], mapping_rules: list[MappingRule]
+) -> dict[str, str]:
     row = {field: "" for field in fields}
     for target, value in constants.items():
         row[target] = json_value_to_csv(value)
+    for rule in mapping_rules:
+        if rule.has_default_if_missing:
+            row[rule.output_column] = json_value_to_csv(rule.default_if_missing)
     return row
 
 
@@ -63,21 +106,26 @@ def resolve_header(source: dict[str, Any], path: Path, encoding: str, options: d
 
 
 def make_index_mapping(
-    source: dict[str, Any], source_mapping: dict[str, str], header_row: list[str] | None,
+    source: dict[str, Any], mapping_rules: list[MappingRule], header_row: list[str] | None,
     output_fields: list[str], delimiter: str,
-) -> list[tuple[int, str]]:
-    result: list[tuple[int, str]] = []
+) -> list[tuple[int, MappingRule]]:
+    result: list[tuple[int, MappingRule]] = []
     header_index = {name: index for index, name in enumerate(header_row or [])}
     if header_row and len(header_index) != len(header_row):
         raise ConfigError(f"Input {source['path']} has duplicate header names.")
-    for source_key, target in source_mapping.items():
+    for rule in mapping_rules:
+        source_key = rule.source_column
         if source_key.isdigit():
-            result.append((int(source_key) - 1, target))
+            result.append((int(source_key) - 1, rule))
         elif header_row is None:
+            if rule.has_default_if_missing:
+                continue
             raise ConfigError(
                 f"Input {source['path']} has no header, so '{source_key}' cannot be mapped by name."
             )
         elif source_key not in header_index:
+            if rule.has_default_if_missing:
+                continue
             available = ", ".join(repr(name) for name in header_row)
             message = (
                 f"Input {source['path']} has no header named {source_key!r} when parsed with "
@@ -92,5 +140,5 @@ def make_index_mapping(
                     )
             raise ConfigError(message)
         else:
-            result.append((header_index[source_key], target))
+            result.append((header_index[source_key], rule))
     return result
