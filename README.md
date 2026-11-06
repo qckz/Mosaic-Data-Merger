@@ -8,6 +8,8 @@ A JSON configuration defines which files to combine, how their fields correspond
 
 Built for large datasets and repeatable automation, Mosaic runs from the command line and processes your data locally. Each run produces a report showing how many records were read, written, filtered, excluded, or rejected, so you can track what happened to your data.
 
+You can also compare two files or groups of files to find records missing from either side. Map different field names to common comparison keys, mix any supported input formats, and export the records found only on the left, only on the right, or on both sides with a label showing where each record exists.
+
 ## Install
 
 Python 3.10+ is required. The project has no third-party runtime dependencies.
@@ -47,12 +49,25 @@ mosaic-data-merger inspect input/threat-intelligence.json --format stix
 
 Commands print machine-readable JSON. Add `--verbose` for progress information on standard error, and `--report /path/to/report.json` to persist a run summary.
 
+## Compare files
+
+The bundled example compares a CSV asset list with a JSONL inventory using their mapped ID fields:
+
+```bash
+mosaic-data-merger validate --config examples/example-compare-job.json
+mosaic-data-merger compare --config examples/example-compare-job.json --dry-run
+mosaic-data-merger compare --config examples/example-compare-job.json --verbose
+```
+
+Its output contains ID 1 labelled `left` and ID 4 labelled `right`. IDs present in both files are omitted, even if their names differ. Multiple comparison keys must all match on one record. See the [comparison reference](COMPARISON.md) for modes, normalization, empty keys, output formats, and report fields.
+
 ## Documentation and examples
 
 - [Configuration reference](CONFIGURATION.md) — complete option reference, format rules, defaults, error behavior, and copyable recipes.
+- [Comparison reference](COMPARISON.md) — find missing records across files, with configuration and reporting examples.
 - [CLI output and reports](CLI_OUTPUT.md) — exact JSON output fields, counters, exit codes, diagnostics, and automation examples.
 - [Roadmap](ROADMAP.md) — planned improvements, including nested JSON paths and explicit array handling.
 - [Architecture](ARCHITECTURE.md) — package structure and extension points.
 - [Examples](examples) — sample jobs, data, and a comprehensive [configuration catalog](examples/config-catalog.json).
 
-The two standalone job samples use configuration-relative `../input/` and `../output/` paths. The catalog references the bundled `examples/data` inputs.
+The merge and STIX standalone job samples use configuration-relative `../input/` and `../output/` paths. The comparison sample and configuration catalog reference bundled `examples/data` inputs.

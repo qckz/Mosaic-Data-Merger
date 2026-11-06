@@ -1,0 +1,37 @@
+{
+  "left": {
+    "path": "data/compare-assets.csv",
+    "format": "csv",
+    "header": true,
+    "delimiter": ",",
+    "mapping": {
+      "Asset ID": "ID",
+      "Hostname": "Name"
+    }
+  },
+  "right": {
+    "path": "data/compare-inventory.jsonl",
+    "format": "jsonl",
+    "mapping": {
+      "asset_id": "ID",
+      "hostname": "Name"
+    }
+  },
+  "comparison": {
+    "keys": ["ID"],
+    "mode": "both",
+    "allow_empty_keys": false,
+    "on_empty_key": "error"
+  },
+  "transformations": {
+    "ID": [{"type": "trim"}]
+  },
+  "output": {
+    "path": "../output/comparison.csv",
+    "format": "csv",
+    "columns": ["ID", "Name"],
+    "side_column": "PresentIn",
+    "quote_all": true,
+    "atomic_write": true
+  }
+}

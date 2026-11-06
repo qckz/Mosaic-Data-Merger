@@ -2,6 +2,8 @@
 
 This is the complete job-configuration reference for Mosaic Data Merger. A job is one JSON object that reads one or more input files, normalizes their records to one output schema, and writes one result.
 
+This page covers merge and transformation jobs. For the separate `compare` command and its `left`, `right`, and `comparison` sections, see [COMPARISON.md](COMPARISON.md).
+
 Paths in a job are resolved relative to the configuration file, not the terminal's current directory. The examples below assume this layout:
 
 ```text

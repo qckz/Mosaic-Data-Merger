@@ -15,17 +15,11 @@ from pathlib import Path
 from typing import Any
 
 from .config import validate_config
-from .csvio import csv_options, detect_dialect, header_is_likely, output_csv_options
+from .csvio import detect_dialect, header_is_likely, output_csv_options
 from .errors import ConfigError, RowError
-from .mapping import (
-    input_format,
-    json_value_to_csv,
-    make_index_mapping,
-    mapping_parts,
-    resolve_header,
-    row_with_constants,
-)
+from .mapping import input_format
 from .paths import config_path, expand_input_paths
+from .readers import read_rows
 from .processing import apply_transformations, filter_matches, validate_row
 from .stores import DiskDeduplicator, DiskExcluder, load_exclusions
 from .writers import JsonArrayWriter, JsonLinesWriter, StixBundleWriter, atomic_path
@@ -159,149 +153,20 @@ def process(
             expanded_inputs.extend((source, path) for path in paths)
         for source, path in expanded_inputs:
             source_stats: Counter[str] = Counter()
-            encoding = source.get("encoding", "utf-8")
-            source_kind = input_format(source)
-            mapping_rules, constants = mapping_parts(source)
-            if source_kind == "csv":
-                delimiter = source.get("delimiter")
-                if delimiter is None:
-                    delimiter, _ = detect_dialect(path, encoding)
-                options = csv_options(source, delimiter)
-                has_header = resolve_header(source, path, encoding, options)
-                if info:
-                    info(
-                        f"Processing {path}: CSV delimiter={options['delimiter']!r}, "
-                        f"header={'yes' if has_header else 'no'}."
-                    )
-                with path.open("r", encoding=encoding, newline="") as handle:
-                    reader = csv.reader(handle, **options)
-                    header = next(reader, None) if has_header else None
-                    if has_header and header is None:
-                        raise ConfigError(f"Input {path} declares a header but is empty.")
-                    index_mapping = make_index_mapping(
-                        source, mapping_rules, header, fields, options["delimiter"]
-                    )
-                    max_index = max(
-                        (index for index, rule in index_mapping if not rule.has_default_if_missing),
-                        default=-1,
-                    )
-                    for source_row_number, values in enumerate(reader, start=2 if has_header else 1):
-                        stats["rows_read"] += 1
-                        source_stats["rows_read"] += 1
-                        row = row_with_constants(fields, constants, mapping_rules)
-                        if len(values) <= max_index:
-                            malformed = source.get("on_malformed_row", "error")
-                            message = (
-                                f"row parsed as {len(values)} column(s) with delimiter "
-                                f"{options['delimiter']!r}; mapping requires column {max_index + 1}. "
-                                "Check the delimiter or source mapping."
-                            )
-                            if malformed == "error":
-                                raise RowError(f"{path}:{source_row_number}: {message}")
-                            if malformed == "skip":
-                                stats["rows_skipped"] += 1
-                                source_stats["rows_skipped"] += 1
-                                continue
-                        for index, rule in index_mapping:
-                            if index < len(values):
-                                row[rule.output_column] = values[index]
-                        if output.get("add_provenance", False):
-                            row["source_file"] = str(path)
-                            row["source_row"] = str(source_row_number)
-                        handle_normalized_row(
-                            row, path, source_row_number, config, validation, validation_rules,
-                            excluder, dedupe, writer, reject_writer, stats, source_stats,
-                        )
-                stats["files"].append({
-                    "path": str(path), **dict(source_stats), "format": "csv",
-                    "header_used": has_header, "delimiter": options["delimiter"],
-                })
-            elif source_kind == "jsonl":
-                if info:
-                    info(f"Processing {path}: JSONL.")
-                with path.open("r", encoding=encoding, newline="") as handle:
-                    for source_row_number, raw_line in enumerate(handle, start=1):
-                        stats["rows_read"] += 1
-                        source_stats["rows_read"] += 1
-                        try:
-                            record = json.loads(raw_line)
-                            if not isinstance(record, dict):
-                                raise ValueError("JSONL records must be JSON objects")
-                        except (json.JSONDecodeError, ValueError) as error:
-                            message = f"{path}:{source_row_number}: invalid JSONL record ({error})"
-                            if source.get("on_malformed_row", "error") == "error":
-                                raise RowError(message) from error
-                            stats["rows_skipped"] += 1
-                            source_stats["rows_skipped"] += 1
-                            continue
-                        row = row_with_constants(fields, constants, mapping_rules)
-                        for rule in mapping_rules:
-                            if rule.source_column in record:
-                                row[rule.output_column] = json_value_to_csv(record[rule.source_column])
-                        if output.get("add_provenance", False):
-                            row["source_file"] = str(path)
-                            row["source_row"] = str(source_row_number)
-                        handle_normalized_row(
-                            row, path, source_row_number, config, validation, validation_rules,
-                            excluder, dedupe, writer, reject_writer, stats, source_stats,
-                        )
-                stats["files"].append({"path": str(path), **dict(source_stats), "format": "jsonl"})
-            else:
-                if info:
-                    info(f"Processing {path}: {source_kind.upper()}.")
-                try:
-                    with path.open("r", encoding=encoding) as handle:
-                        document = json.load(handle)
-                except json.JSONDecodeError as error:
-                    raise RowError(f"{path}: invalid JSON document ({error})") from error
-                if source_kind == "stix":
-                    if not isinstance(document, dict):
-                        raise RowError(f"{path}: a STIX document must be an object or Bundle.")
-                    if document.get("type") == "bundle":
-                        if not isinstance(document.get("id"), str) or not document["id"].startswith("bundle--"):
-                            raise RowError(f"{path}: a STIX Bundle requires an id beginning with 'bundle--'.")
-                        records = document.get("objects", [])
-                        if not isinstance(records, list):
-                            raise RowError(f"{path}: STIX Bundle objects must be a list.")
-                    else:
-                        records = [document]
-                elif isinstance(document, list):
-                    records = document
-                else:
-                    records = [document]
-                for source_row_number, record in enumerate(records, start=1):
-                    stats["rows_read"] += 1
-                    source_stats["rows_read"] += 1
-                    if not isinstance(record, dict):
-                        message = f"{path}:{source_row_number}: JSON records must be objects"
-                        if source.get("on_malformed_row", "error") == "error":
-                            raise RowError(message)
-                        stats["rows_skipped"] += 1
-                        source_stats["rows_skipped"] += 1
-                        continue
-                    if source_kind == "stix" and (
-                        not isinstance(record.get("type"), str)
-                        or not isinstance(record.get("id"), str)
-                        or not record["id"].startswith(f"{record['type']}--")
-                    ):
-                        message = f"{path}:{source_row_number}: STIX objects require type-prefixed string ids"
-                        if source.get("on_malformed_row", "error") == "error":
-                            raise RowError(message)
-                        stats["rows_skipped"] += 1
-                        source_stats["rows_skipped"] += 1
-                        continue
-                    row = row_with_constants(fields, constants, mapping_rules)
-                    for rule in mapping_rules:
-                        if rule.source_column in record:
-                            row[rule.output_column] = json_value_to_csv(record[rule.source_column])
-                    if output.get("add_provenance", False):
-                        row["source_file"] = str(path)
-                        row["source_row"] = str(source_row_number)
-                    handle_normalized_row(
-                        row, path, source_row_number, config, validation, validation_rules,
-                        excluder, dedupe, writer, reject_writer, stats, source_stats,
-                    )
-                stats["files"].append({"path": str(path), **dict(source_stats), "format": source_kind})
+            reader_stats: dict[str, Any] = {}
+            for source_row_number, row in read_rows(source, path, fields, reader_stats, info):
+                if output.get("add_provenance", False):
+                    row["source_file"] = str(path)
+                    row["source_row"] = str(source_row_number)
+                handle_normalized_row(
+                    row, path, source_row_number, config, validation, validation_rules,
+                    excluder, dedupe, writer, reject_writer, stats, source_stats,
+                )
+            stats["rows_read"] += reader_stats.get("rows_read", 0)
+            stats["rows_skipped"] += reader_stats.get("rows_skipped", 0)
+            for key, value in source_stats.items():
+                reader_stats[key] = reader_stats.get(key, 0) + value
+            stats["files"].append(reader_stats)
         if output_handle:
             if isinstance(writer, (JsonArrayWriter, JsonLinesWriter, StixBundleWriter)):
                 writer.close()

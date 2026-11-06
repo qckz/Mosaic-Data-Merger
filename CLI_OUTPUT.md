@@ -4,7 +4,7 @@ Mosaic Data Merger is designed for automation. Every successful command writes o
 
 ## Output contract
 
-Successful "inspect", "validate", and "run" commands:
+Successful "inspect", "validate", "run", and "compare" commands:
 
 - return exit code 0;
 - write one valid JSON document to standard output, using Python's standard-output encoding;
@@ -18,6 +18,8 @@ mosaic-data-merger run --config config/job.json > run-report.json
 ~~~
 
 Paths inside the job configuration are relative to the configuration file. The optional "run --report PATH" argument is different: a relative report path is relative to the shell's current directory.
+
+"compare --report PATH" uses the same path rule. For comparison-mode reports and comparison validation output, see [Comparison reports and automation](COMPARISON.md#reports-and-automation). The run/validate examples below describe merge jobs.
 
 ## Contents
 
@@ -330,12 +332,12 @@ Both "validate" and "run" include "input_patterns":
 | Situation | Exit code | Standard output | Standard error |
 |---|:---:|---|---|
 | Successful command | 0 | One JSON document | Empty unless "--verbose" is used. |
-| Handled configuration, row, file, or CSV error | 2 | Usually no success JSON report | A diagnostic beginning with "error:", possibly preceded by verbose messages. |
+| Handled configuration, row, file, encoding, CSV, or SQLite error | 2 | Usually no success JSON report | A diagnostic beginning with "error:", possibly preceded by verbose messages. |
 | Argument syntax error | 2 | Empty | Argparse usage and error text. |
 
-Always check the exit code. The CLI writes its summary to stdout before saving "--report": if saving that report fails, stdout can already contain a complete summary while the command exits with code 2. Data output may also have been completed. Unexpected exceptions, including some encoding errors, can produce a traceback and exit code 1.
+Always check the exit code. The CLI writes its summary to stdout before saving "--report": if saving that report fails, stdout can already contain a complete summary while the command exits with code 2. Data output may also have been completed. Unexpected exceptions, including unknown encoding-name lookup errors, can produce a traceback and exit code 1.
 
-"--verbose" is available with "run". It writes progress messages to standard error without changing standard output:
+"--verbose" is available with "run" and "compare". It writes progress messages to standard error without changing standard output:
 
 ~~~text
 info: Input '../input/people-*.csv' matched 60 file(s) as CSV.

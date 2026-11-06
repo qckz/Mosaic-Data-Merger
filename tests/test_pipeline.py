@@ -8,6 +8,31 @@ import mosaic_data_merger
 
 
 class CsvMergeTests(unittest.TestCase):
+    def test_shared_readers_preserve_malformed_and_validation_skip_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            (directory / "source.csv").write_text("Name,Value\nA,1\nB,bad\nShort\n", encoding="utf-8")
+            (directory / "source.jsonl").write_text(
+                'invalid json\n{"value":"2"}\n{"value":"bad"}\n', encoding="utf-8"
+            )
+            config = {
+                "_config_directory": str(directory),
+                "output": {"path": "out.json", "format": "json", "columns": ["Value"]},
+                "inputs": [
+                    {"path": "source.csv", "delimiter": ",", "mapping": {"Value": "Value"}, "on_malformed_row": "skip"},
+                    {"path": "source.jsonl", "mapping": {"value": "Value"}, "on_malformed_row": "skip"},
+                ],
+                "validation": {"on_error": "skip", "rules": [{"column": "Value", "type": "number"}]},
+            }
+            report = mosaic_data_merger.process(config)
+            self.assertEqual(report["rows_read"], 6)
+            self.assertEqual(report["rows_written"], 2)
+            self.assertEqual(report["rows_skipped"], 4)
+            for source_stats in report["files"]:
+                self.assertEqual(source_stats["rows_read"], 3)
+                self.assertEqual(source_stats["rows_written"], 1)
+                self.assertEqual(source_stats["rows_skipped"], 2)
+
     def test_configuration_catalog_jobs_validate_against_sample_data(self) -> None:
         project_directory = Path(__file__).parent.parent
         examples_directory = project_directory / "examples"
@@ -17,7 +42,8 @@ class CsvMergeTests(unittest.TestCase):
                 continue
             with self.subTest(job=name):
                 job["_config_directory"] = str(examples_directory)
-                mosaic_data_merger.validate_config(job)
+                validator = mosaic_data_merger.validate_comparison if "comparison" in job else mosaic_data_merger.validate_config
+                validator(job)
 
     def make_job(self, directory: Path) -> Path:
         (directory / "no-header.csv").write_text(

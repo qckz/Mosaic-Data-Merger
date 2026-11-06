@@ -8,11 +8,15 @@ Mosaic Data Merger is a standard-library package with a streaming pipeline. The 
 | `paths` | Resolve config-relative paths and expand wildcards. |
 | `csvio` | CSV dialect detection and parser/writer options. |
 | `mapping` | Source-format detection and normalization into output fields. |
+| `readers` | Shared CSV/JSON/JSONL/STIX parsing and normalized row iteration. |
+| `comparison` | Comparison configuration, indexed membership checks, and per-side reporting. |
 | `processing` | Transformations, filters, and validation rules. |
 | `stores` | Temporary SQLite stores for deduplication and exclusions. |
 | `writers` | Streaming CSV/JSON/JSONL/STIX output and atomic destinations. |
-| `pipeline` | Source iteration, row orchestration, reporting, and inspection. |
+| `pipeline` | Merge row orchestration, reporting, and inspection. |
 
 The pipeline processes CSV and JSONL one record at a time. JSON and STIX documents remain whole-document inputs by design; output writers remain streaming. Deduplication and exclusions use temporary SQLite databases rather than materializing input rows in memory.
 
-To add a format, implement its reader branch in `pipeline`, reuse `mapping.row_with_constants` and `processing` for normalization, then add its validation and documented configuration option. To add an output format, add a writer with `writerow` and `close`, register it in the pipeline, and extend configuration validation.
+Comparison uses the shared readers to load mapped records and composite keys into a temporary SQLite database. It indexes membership by side and key, then writes unmatched rows in source order. This preserves duplicate rows without retaining datasets in memory. The database is closed and removed on success or failure.
+
+To add a format, implement its reader branch in `readers`, reuse `mapping.row_with_constants` for normalization, then add its validation and inspection support. To add an output format, add a writer with `writerow` and `close`, register it in both the merge pipeline and `writers.open_output`, and extend configuration validation.

@@ -2,6 +2,17 @@
 
 All notable changes to Mosaic Data Merger are documented here.
 
+## 0.5.6
+
+- Added a dedicated `compare` command for CSV, JSON, JSONL, and STIX in any input combination.
+- Compare mapped composite keys with AND matching and select `left_only`, `right_only`, or `both` results.
+- Write unmatched records as CSV, JSON, JSONL, or STIX, with configurable source-side labels.
+- Support headerless CSV, wildcard inputs, constants, missing-field defaults, shared transformations, provenance, and explicit empty-key policies for comparisons.
+- Preserve unmatched duplicates and report matched, missing, skipped, and written row counts per side.
+- Use temporary SQLite storage for comparison keys and normalized records, with shared streaming CSV/JSONL readers.
+- Added comparison validation, dry runs, verbose diagnostics, saved reports, and protection against overwriting comparison inputs or configuration.
+- Added a comparison reference and runnable CSV-versus-JSONL example.
+
 ## 0.5.5
 
 - Added descriptive optional mappings with `output_column` and `default_if_missing`, so CSV, JSON, JSONL, and STIX sources can use a fallback when a source field does not exist.
