@@ -1,8 +1,12 @@
 # Mosaic Data Merger
 
-An offline, schema-driven data transformation, merge, and exclusion tool.
+Combine data from multiple files into one consistent output.
 
-Mosaic Data Merger transforms one or many CSV, JSON, JSONL, and STIX 2.1 files into CSV, JSON, JSONL, or STIX output. It is designed for automation and large files: CSV and JSONL are streamed row by row, while deduplication and exclusions use temporary SQLite indexes instead of loading source rows into memory.
+Mosaic Data Merger brings together records from files that use different formats, column names, and layouts. Combine CSV, JSON, JSONL, and STIX files in the same job, map their fields to a shared set of output columns, and write the combined result in your chosen format. For example, a column called `City` in one CSV and a key called `location` in a JSON file can both populate the `Place` column in the output.
+
+A JSON configuration defines which files to combine, how their fields correspond, and how to process their values. You can select entire groups of files using wildcard filenames, clean and transform values, fill missing fields with defaults, remove duplicates, and exclude records that match an exclusion list. Mosaic can also transform or convert a single file using the same configuration options.
+
+Built for large datasets and repeatable automation, Mosaic runs from the command line and processes your data locally. Each run produces a report showing how many records were read, written, filtered, excluded, or rejected, so you can track what happened to your data.
 
 ## Install
 
