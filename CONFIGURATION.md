@@ -177,7 +177,7 @@ STIX output creates one configured STIX 2.1 object per normalized row and wraps 
 | `timestamp` | string | current UTC timestamp | Timestamp used for generated `created` and `modified` values. |
 | `add_timestamps` | boolean | `true` | Add generated `created` and `modified` values unless already present in `static`. |
 
-The tool validates the Bundle and object envelope, but it does not fully validate each STIX object type. Supply the properties required by the chosen STIX type.
+STIX input processing checks basic object and Bundle structure, including type-prefixed IDs. Output generation validates configuration shape but does not validate generated objects against the STIX specification. Static properties and mapped properties can override generated IDs or other envelope fields. Supply valid IDs, timestamps, and the properties required by the chosen STIX type.
 
 ## Input reference
 
@@ -276,9 +276,9 @@ A syntactically invalid JSON or STIX document always stops the job because its r
 
 Each input `mapping` maps source fields to names in `output.columns`. Unmapped source data is ignored.
 
-### Required source mapping
+### Simple source mapping
 
-Use a string when the source field must exist:
+Use a string to map a source field without a fallback:
 
 ```json
 "mapping": {
@@ -288,6 +288,8 @@ Use a string when the source field must exist:
 ```
 
 For a headered CSV, a missing required header is an error. This is intentional: it catches misspelled headers and unexpected source layouts.
+
+For JSON, JSONL, and STIX, an absent key becomes an empty string. Use a required validation rule when a non-empty output value is mandatory. A short CSV row follows the configured malformed-row policy.
 
 ### Default when a source field is absent
 
@@ -306,11 +308,13 @@ Use the object form when a source field may be absent:
 | Field | Type | Meaning |
 |---|---|---|
 | `output_column` | non-empty string | Required destination name; it must appear in `output.columns`. |
-| `default_if_missing` | any JSON value | Used only when the source CSV header or JSON, JSONL, or STIX key does not exist. |
+| `default_if_missing` | any JSON value | Used when a CSV header or mapped row position is absent, or a JSON, JSONL, or STIX key does not exist. |
 
 If a CSV has the `Country` header, its value is used. If the header is absent, `Unknown` is used. If the header exists but a row's value is blank, the blank value is preserved. Use [`default_if_empty`](#transformations) as well when blanks need a fallback.
 
 The object must contain exactly `output_column` and `default_if_missing`. This keeps the syntax explicit and prevents silent misspellings.
+
+For headerless CSV, use a numeric source position in the object mapping. If that position is absent from a short row, its default is used even with the normal `error` malformed-row policy; other required positions still follow that policy. A name-based optional mapping on a headerless file always uses its default, since there is no header to resolve the name. A present JSON null or empty string overrides the missing-field default and becomes an empty output value.
 
 ### Fixed values: `$constants`
 
@@ -372,12 +376,14 @@ Mappings address top-level JSON/STIX keys. Nested-path expressions such as `cust
 | `lowercase` | — | Convert to lowercase. |
 | `uppercase` | — | Convert to uppercase. |
 | `title_case` | — | Apply Python title case. |
-| `default_if_empty` | `value` | Use `value` only when the current output value is empty. |
+| `default_if_empty` | optional `value` (defaults to empty string) | Use `value` only when the current output value is empty. |
 | `replace` | `old`; optional `new` | Replace every occurrence of `old` with `new` (empty by default). |
-| `null_if` | `values` array | Set the value to empty when it exactly matches any listed value. |
+| `null_if` | optional `values` array (defaults to empty list) | Set the value to empty when it exactly matches any listed value. |
 | `date_format` | `input_formats` array and `output_format` | Parse with the first matching input format and reformat it. |
 
 `set_default` is not supported. Use `default_if_empty`.
+
+Transformation names and parameter shapes are checked by `validate` before records are read. `default_if_empty` uses Python string conversion for its value; use a string for predictable text output. Whitespace is not empty: apply `trim` first when spaces should trigger the fallback.
 
 ## Filters
 

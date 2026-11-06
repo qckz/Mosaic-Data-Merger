@@ -6,6 +6,8 @@ This roadmap describes the intended direction of Mosaic Data Merger. It is not a
 
 Version 0.6 is planned as a cohesive improvement to how Mosaic reads and reshapes structured data. The objective is to make JSON, JSONL, STIX, and delimited CSV fields equally practical without guessing at a source file's meaning.
 
+Configuration examples in this roadmap are design sketches, not runnable jobs in version 0.5.5. The final syntax must be reconciled with the existing column-keyed transformation configuration.
+
 ### Nested JSON and STIX paths
 
 Allow mappings to select values below the top-level object using an explicit path:
@@ -123,7 +125,7 @@ For example:
 
 All transformations should remain explicit about their input column, output column, handling of missing values, and error behavior.
 
-### Operational principles
+### Operational Principles
 
 The 0.6 work should preserve Mosaic's current operational principles:
 

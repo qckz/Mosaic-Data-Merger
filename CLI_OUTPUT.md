@@ -7,7 +7,7 @@ Mosaic Data Merger is designed for automation. Every successful command writes o
 Successful "inspect", "validate", and "run" commands:
 
 - return exit code 0;
-- write one valid UTF-8 JSON document to standard output;
+- write one valid JSON document to standard output, using Python's standard-output encoding;
 - use indented JSON for readability;
 - keep standard output free of progress messages.
 
@@ -85,7 +85,7 @@ mosaic-data-merger inspect input/intelligence.json --format stix
 | "sample_keys" | array of strings | Sorted union of top-level keys found in up to the first five JSONL records. |
 | "sample_rows" | array of objects | Up to five parsed JSONL objects. |
 
-JSONL records must be JSON objects. An invalid line causes "inspect" to fail and reports its line number.
+JSONL records must be JSON objects. An invalid line within the first five sampled records causes "inspect" to fail and reports its line number. Later records are not validated by inspection.
 
 ### JSON
 
@@ -97,7 +97,8 @@ JSONL records must be JSON objects. An invalid line causes "inspect" to fail and
   "record_count": 2,
   "sample_keys": ["city", "name"],
   "sample_rows": [
-    {"city": "Amsterdam", "name": "Alice"}
+    {"city": "Amsterdam", "name": "Alice"},
+    {"city": "Utrecht", "name": "Bob"}
   ]
 }
 ~~~
@@ -117,7 +118,7 @@ JSONL records must be JSON objects. An invalid line causes "inspect" to fail and
   "format": "stix",
   "bundle_id": "bundle--00000000-0000-4000-8000-000000000001",
   "object_count": 1,
-  "sample_keys": ["id", "name", "type"],
+  "sample_keys": ["id", "type"],
   "sample_rows": [
     {"type": "indicator", "id": "indicator--..."}
   ]
@@ -141,8 +142,8 @@ mosaic-data-merger validate --config config/job.json
 ~~~json
 {
   "valid": true,
-  "output_columns": ["Place", "Name", "source_file", "source_row"],
-  "input_count": 2,
+  "output_columns": ["Place", "Name", "Email", "Country", "source_file", "source_row"],
+  "input_count": 1,
   "input_patterns": [
     {
       "path": "../input/people-*.csv",
@@ -176,7 +177,7 @@ mosaic-data-merger run --config config/job.json --dry-run
 mosaic-data-merger run --config config/job.json --report reports/latest.json
 ~~~
 
-"run" returns a complete operational report for CSV, JSON, JSONL, and STIX output.
+"run" returns a complete operational report for CSV, JSON, JSONL, and STIX output. The example below shows the overall counters; its three detail arrays have been shortened for readability.
 
 ~~~json
 {
@@ -200,11 +201,11 @@ mosaic-data-merger run --config config/job.json --report reports/latest.json
 
 | Field | Type | Meaning |
 |---|---|---|
-| "output" | string | Absolute resolved output destination. It is reported even during a dry run. |
+| "output" | string | Output destination made absolute relative to the configuration directory; the text can still contain ".." segments. It is reported even during a dry run. |
 | "rows_read" | integer | Source records examined across every expanded input file. |
 | "rows_written" | integer | Records written, or records that would be written during a dry run. |
 | "rows_filtered" | integer | Records removed because at least one filter did not match. |
-| "rows_rejected" | integer | Validation failures written to the rejects file. |
+| "rows_rejected" | integer | Row-processing failures assigned to the reject policy, including date-transformation failures. During a dry run, counts rows that would be rejected. |
 | "rows_skipped" | integer | Malformed or invalid records skipped by policy, including validation failures with "on_error": "skip". |
 | "rows_excluded" | integer | Records removed because they matched an exclusion list. |
 | "rows_deduplicated" | integer | Records removed because they matched an earlier configured deduplication key. |
@@ -225,7 +226,7 @@ Every source record increments "rows_read" once. It can then end in one of these
 | Written | "rows_written" | Record passes all stages, or would pass in a dry run. |
 | Filtered | "rows_filtered" | At least one filter does not match. |
 | Excluded | "rows_excluded" | Record matches an exclusion-list key. |
-| Rejected | "rows_rejected" | Validation fails and "validation.on_error" is "reject". |
+| Rejected | "rows_rejected" | A transformation raises a row error or validation fails, and "validation.on_error" is "reject". |
 | Skipped | "rows_skipped" | A malformed/invalid record is skipped, or validation fails with "on_error": "skip". |
 | Deduplicated | "rows_deduplicated" | Record matches an earlier deduplication key. |
 
@@ -233,7 +234,7 @@ With an "error" policy, processing stops instead of returning a completed report
 
 ### Dry runs
 
-A dry run performs mapping, transformations, filters, exclusions, validation, and deduplication, but creates no output or rejects files. "rows_written" means rows that would have been written.
+A dry run performs mapping, transformations, filters, exclusions, validation, and deduplication, but creates no data output or rejects files. "rows_written" means rows that would have been written. Temporary SQLite indexes may still be used, and an explicitly requested "--report" file is still saved. A dry run does not test destination write permissions or validate an existing append destination.
 
 ## Per-file statistics
 
@@ -329,8 +330,10 @@ Both "validate" and "run" include "input_patterns":
 | Situation | Exit code | Standard output | Standard error |
 |---|:---:|---|---|
 | Successful command | 0 | One JSON document | Empty unless "--verbose" is used. |
-| Configuration, row, file, encoding, or CSV error | 2 | No success JSON report | One line beginning with "error:". |
+| Handled configuration, row, file, or CSV error | 2 | Usually no success JSON report | A diagnostic beginning with "error:", possibly preceded by verbose messages. |
 | Argument syntax error | 2 | Empty | Argparse usage and error text. |
+
+Always check the exit code. The CLI writes its summary to stdout before saving "--report": if saving that report fails, stdout can already contain a complete summary while the command exits with code 2. Data output may also have been completed. Unexpected exceptions, including some encoding errors, can produce a traceback and exit code 1.
 
 "--verbose" is available with "run". It writes progress messages to standard error without changing standard output:
 
@@ -345,6 +348,7 @@ info: Exclusion list '../input/do-not-export.csv' matched 1 file(s).
 ### Save the report
 
 ~~~bash
+mkdir -p reports
 mosaic-data-merger run --config config/job.json --report reports/latest.json > reports/latest-stdout.json
 ~~~
 
@@ -353,6 +357,8 @@ The report file and redirected standard output contain the same JSON object.
 ### Fail when nothing was written
 
 ~~~bash
+set -euo pipefail
+
 report="$(mosaic-data-merger run --config config/job.json)"
 written="$(printf '%s' "$report" | jq '.rows_written')"
 

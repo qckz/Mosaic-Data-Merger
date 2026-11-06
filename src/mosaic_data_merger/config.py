@@ -10,6 +10,7 @@ from .csvio import csv_options, output_csv_options
 from .errors import ConfigError
 from .mapping import input_format, mapping_parts
 from .paths import expand_input_paths
+from .processing import validate_action
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -139,6 +140,8 @@ def validate_config(config: dict[str, Any], check_inputs: bool = True) -> list[s
     for column, actions in transforms.items():
         if column not in columns or not isinstance(actions, list):
             raise ConfigError("Each transformation column must exist and contain an action list.")
+        for action in actions:
+            validate_action(action)
 
     validation = config.get("validation", {})
     if not isinstance(validation, dict):
